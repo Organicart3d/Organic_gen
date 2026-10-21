@@ -39,8 +39,11 @@ button:disabled{opacity:.55;cursor:default}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px;padding:20px 0 40px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;overflow:hidden;display:flex;flex-direction:column;transition:.2s}
 .card:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 60%,var(--line))}
-.thumb{height:150px;background:var(--surface2);display:grid;place-items:center}
-.thumb svg{width:100%;height:100%}
+.thumb{position:relative;aspect-ratio:16/10;background:#05060a;overflow:hidden}
+.thumb.noframe{background:var(--surface2)}
+.thumb svg{position:absolute;inset:0;width:100%;height:100%}
+.thumb iframe{position:absolute;left:0;top:0;width:1280px;height:800px;border:0;background:#05060a;transform-origin:0 0;pointer-events:none}
+.thumb a.cover{position:absolute;inset:0;z-index:2}
 .body{padding:16px 16px 18px;display:flex;flex-direction:column;gap:8px;flex:1}
 .body h3{margin:0;font-size:18px}
 .body p{margin:0;color:var(--muted);font-size:14px;flex:1}
@@ -74,7 +77,7 @@ footer{border-top:1px solid var(--line);padding:20px 0 32px;color:var(--muted);f
     <button disabled>Мои проекты</button>
   </div>
 
-  <footer>© Greenstory · Organic_gen </footer>
+  <footer>© Ринат · Pavlodar</footer>
 </div>
 
 <script>
@@ -101,12 +104,21 @@ MODELS.forEach(function(m){
   var card = document.createElement("article");
   card.className = "card";
   card.innerHTML =
-    '<div class="thumb"><svg viewBox="0 0 320 150" role="img" aria-label="'+m.title+'">'+(ART[m.art]||"")+'</svg></div>'+
+    (ready
+      ? '<div class="thumb"><iframe src="'+m.url+'" loading="lazy" tabindex="-1" scrolling="no" title="'+m.title+'"></iframe><a class="cover" href="'+m.url+'" target="_blank" rel="noopener" aria-label="Открыть: '+m.title+'"></a></div>'
+      : '<div class="thumb noframe"><svg viewBox="0 0 320 150" role="img" aria-label="'+m.title+'">'+(ART[m.art]||"")+'</svg></div>')+
     '<div class="body"><h3>'+m.title+'</h3><p>'+m.desc+'</p>'+
     '<div class="tags">'+m.tags.map(function(t){return '<span class="tag">'+t+'</span>';}).join("")+'</div>'+
     '<a class="btn open" '+(ready?'href="'+m.url+'" target="_blank" rel="noopener"':'aria-disabled="true"')+'>'+(ready?'Открыть':'Скоро')+'</a></div>';
   grid.appendChild(card);
 });
+
+function fit(t){var f=t.querySelector("iframe");if(f)f.style.transform="scale("+(t.clientWidth/1280)+")";}
+document.querySelectorAll(".thumb").forEach(function(t){
+  fit(t);
+  if(window.ResizeObserver) new ResizeObserver(function(){fit(t);}).observe(t);
+});
+window.addEventListener("resize",function(){document.querySelectorAll(".thumb").forEach(fit);});
 
 var root = document.documentElement;
 try{ var saved = localStorage.getItem("theme"); if(saved) root.setAttribute("data-theme", saved); }catch(e){}
