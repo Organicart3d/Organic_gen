@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Прически</title>
+<style>
+html,body{margin:0;height:100%;background:#0e1013;color:#d8dde3;font:13px/1.3 system-ui,sans-serif;overflow:hidden;overscroll-behavior:none}
+#v{position:fixed;inset:0;touch-action:none}canvas{display:block}
+#bar{position:fixed;left:50%;transform:translateX(-50%);bottom:max(10px,env(safe-area-inset-bottom));display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:calc(100% - 16px);padding:6px;background:#161a1fd9;border:1px solid #2a3038;border-radius:12px}
+#bar button{font:inherit;color:inherit;background:#232932;border:1px solid #333b46;border-radius:8px;padding:9px 11px;min-height:40px;cursor:pointer}
+#bar button.on{background:#2d8f84;border-color:#49c2b4;color:#fff}
+#bar i{width:1px;background:#333b46}
+#hint{position:fixed;left:10px;top:max(10px,env(safe-area-inset-top));color:#8c96a3;pointer-events:none}
+.lil-gui.root{top:env(safe-area-inset-top,0)!important}
+</style></head><body>
+<div id="v"></div><div id="hint"></div><div id="bar"></div>
+<input id="file" type="file" accept=".obj,.glb,.gltf" hidden>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {OBJLoader} from 'three/addons/loaders/OBJLoader.js';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {mergeVertices} from 'three/addons/utils/BufferGeometryUtils.js';
+import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/+esm';
+
+const mobile=innerWidth<700, NMAX=8000, TAU=6.2832;
+const P={density:mobile?.12:.25,length:.8,spread:.3,rootW:.022,tipW:0,profile:1.4,sides:4,flat:.4,segs:12,seed:7,
+ mode:'shape',vx:0,vy:1,vz:0,droop:.7,curlFreq:5,curlAmp:0,rootColor:'#3a2418',tipColor:'#b07a45',
+ growTime:6,progress:1,brush:.2,combStrength:.35,hugCy:0,exportScale:100};
+const state={grow:1,running:false}, info={count:0};
+let tool='cam',needBuild=true,dirty=true,W,B,roots,act=[];
+const undo=[];
+
+// ---------- scene ----------
+const view=document.getElementById('v');
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));view.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x0e1013);
+const cam=new THREE.PerspectiveCamera(40,1,.05,50);cam.position.set(0,.5,4.2);
+const controls=new OrbitControls(cam,renderer.domElement);controls.target.set(0,-.2,0);controls.enableDamping=true;
+scene.add(new THREE.HemisphereLight(0xcfd8ff,0x20242c,1.1));
+const dl=new THREE.DirectionalLight(0xffffff,2.2);dl.position.set(2,3,3);scene.add(dl);
+const dl2=new THREE.DirectionalLight(0x88a0ff,.7);dl2.position.set(-3,1,-2);scene.add(dl2);
+function resize(){renderer.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}
+addEventListener('resize',resize);resize();
+
+const head=new THREE.Mesh(new THREE.BufferGeometry(),new THREE.MeshStandardMaterial({vertexColors:true,roughness:.8}));scene.add(head);
+const hair=new THREE.Mesh(new THREE.BufferGeometry(),new THREE.MeshStandardMaterial({vertexColors:true,roughness:.55,flatShading:true,side:THREE.DoubleSide}));
+hair.frustumCulled=false;scene.add(hair);
+const cursor=new THREE.Mesh(new THREE.RingGeometry(.95,1,48),new THREE.MeshBasicMaterial({color:0x5ff0dc,side:THREE.DoubleSide,depthTest:false,transparent:true}));
+cursor.renderOrder=9;cursor.visible=false;scene.add(cursor);
+
+// ---------- head & growth mask ----------
+const SK=[.42,.44,.47],SEL=[.2,.74,.67];
+function paintColors(){const c=head.geometry.attributes.color.array;
+ for(let i=0;i<W.length;i++){const w=W[i];for(let k=0;k<3;k++)c[3*i+k]=SK[k]+(SEL[k]-SK[k])*w}
+ head.geometry.attributes.color.needsUpdate=true}
+function setHead(g,init){
+ if(!g.attributes.normal)g.computeVertexNormals();
+ head.geometry.dispose();head.geometry=g;
+ const n=g.attributes.position.count;W=new Float32Array(n);
+ g.setAttribute('color',new THREE.BufferAttribute(new Float32Array(n*3),3));
+ if(init)init(g.attributes.position.array,W);
+ undo.length=0;sample();paintColors();needBuild=true}
+function useSphere(){setHead(new THREE.SphereGeometry(1,96,64),(p,w)=>{for(let i=0;i<w.length;i++)if(p[3*i+1]>.2)w[i]=1});P.hugCy=0;gui&&gui.controllersRecursive().forEach(c=>c.updateDisplay())}
+function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+// fixed pool of root candidates (seeded): parameter changes never move strands
+function sample(){
+ const g=head.geometry,pa=g.attributes.position.array,na=g.attributes.normal.array,idx=g.index.array,T=idx.length/3,cum=new Float64Array(T);let acc=0;
+ for(let t=0;t<T;t++){const a=3*idx[3*t],b=3*idx[3*t+1],c=3*idx[3*t+2];
+  const ux=pa[b]-pa[a],uy=pa[b+1]-pa[a+1],uz=pa[b+2]-pa[a+2],vx=pa[c]-pa[a],vy=pa[c+1]-pa[a+1],vz=pa[c+2]-pa[a+2];
+  acc+=Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx)/2;cum[t]=acc}
+ const R=mulberry(P.seed);
+ roots={seed:P.seed,tri:new Uint32Array(NMAX*3),bar:new Float32Array(NMAX*3),p:new Float32Array(NMAX*3),n:new Float32Array(NMAX*3),
+  rr:new Float32Array(NMAX),rl:new Float32Array(NMAX),rp:new Float32Array(NMAX),rv:new Float32Array(NMAX)};
+ for(let i=0;i<NMAX;i++){
+  const x=R()*acc;let lo=0,hi=T-1;while(lo<hi){const m=(lo+hi)>>1;if(cum[m]<x)lo=m+1;else hi=m}
+  let u=R(),v=R();if(u+v>1){u=1-u;v=1-v}const w=1-u-v,t=[idx[3*lo],idx[3*lo+1],idx[3*lo+2]];
+  roots.tri.set(t,3*i);roots.bar.set([w,u,v],3*i);
+  let nl=0;for(let k=0;k<3;k++){roots.p[3*i+k]=w*pa[3*t[0]+k]+u*pa[3*t[1]+k]+v*pa[3*t[2]+k];
+   const nn=w*na[3*t[0]+k]+u*na[3*t[1]+k]+v*na[3*t[2]+k];roots.n[3*i+k]=nn;nl+=nn*nn}
+  nl=Math.sqrt(nl)||1;for(let k=0;k<3;k++)roots.n[3*i+k]/=nl;
+  roots.rr[i]=R();roots.rl[i]=R();roots.rp[i]=R()*TAU;roots.rv[i]=R()}
+ B=new Float32Array(NMAX*3)}
+
+// ---------- hair mesh: one continuous tube per strand, merged into one geometry ----------
+function build(){
+ const {tri,bar,rr}=roots;act=[];
+ for(let i=0;i<NMAX;i++){if(rr[i]>=P.density)continue;
+  if(W[tri[3*i]]*bar[3*i]+W[tri[3*i+1]]*bar[3*i+1]+W[tri[3*i+2]]*bar[3*i+2]>.5)act.push(i)}
+ const S=P.sides,K=P.segs,rings=K+1,nv=act.length*rings*S;
+ const pos=new Float32Array(nv*3),col=new Float32Array(nv*3),ind=new Uint32Array(act.length*K*S*6);
+ const c0=new THREE.Color(P.rootColor),c1=new THREE.Color(P.tipColor),c=new THREE.Color();let q=0;
+ act.forEach((i,s)=>{const base=s*rings*S,sh=.88+roots.rv[i]*.24;
+  for(let k=0;k<rings;k++){c.lerpColors(c0,c1,k/K).multiplyScalar(sh);
+   for(let j=0;j<S;j++)col.set([c.r,c.g,c.b],(base+k*S+j)*3)}
+  for(let k=0;k<K;k++)for(let j=0;j<S;j++){
+   const a=base+k*S+j,b=base+k*S+(j+1)%S,cc=a+S,d=b+S;ind[q++]=a;ind[q++]=b;ind[q++]=cc;ind[q++]=b;ind[q++]=d;ind[q++]=cc}});
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+ g.setAttribute('color',new THREE.BufferAttribute(col,3));g.setIndex(new THREE.BufferAttribute(ind,1));
+ hair.geometry.dispose();hair.geometry=g;info.count=act.length;infoCtl&&infoCtl.updateDisplay();needBuild=false;dirty=true}
+
+function fill(){
+ const pa=hair.geometry.attributes.position;if(!pa)return;
+ const out=pa.array,S=P.sides,K=P.segs,gr=state.grow,cy=P.hugCy,R=roots,Bv=B,cl=new Float32Array((K+1)*3);
+ const gl=Math.hypot(P.vx,P.vy,P.vz),gx=gl?P.vx/gl:0,gy=gl?P.vy/gl:1,gz=gl?P.vz/gl:0;
+ const CA=[],SA=[];for(let j=0;j<S;j++){CA.push(Math.cos((j+.5)*TAU/S));SA.push(Math.sin((j+.5)*TAU/S))}
+ for(let s=0;s<act.length;s++){
+  const i=act[s],px=R.p[3*i],py=R.p[3*i+1],pz=R.p[3*i+2],nx=R.n[3*i],ny=R.n[3*i+1],nz=R.n[3*i+2];
+  const L=P.length*Math.max(.05,1+P.spread*(R.rl[i]*2-1))*gr,ds=L/K;
+  let dx,dy,dz;
+  if(P.mode==='normal'){dx=nx;dy=ny;dz=nz}
+  else if(P.mode==='vector'){dx=gx;dy=gy;dz=gz}
+  else{ // follow head form: slide down along the surface, radial from the crown
+   const tx=nx*ny,ty=ny*ny-1,tz=nz*ny,sl=Math.hypot(tx,ty,tz);
+   let hx=px,hz=pz,hl=Math.hypot(hx,hz);if(hl<1e-4){hx=1;hz=0;hl=1}hx/=hl;hz/=hl;
+   const hw=(1-Math.min(1,sl))**2,ax=tx+hx*hw,ay=ty,az=tz+hz*hw,al=Math.hypot(ax,ay,az)||1;
+   dx=ax/al*.85+nx*.3;dy=ay/al*.85+ny*.3;dz=az/al*.85+nz*.3}
+  const bx=Bv[3*i],by=Bv[3*i+1],bz=Bv[3*i+2],bl=Math.min(1,Math.hypot(bx,by,bz));
+  dx+=bx*3;dy+=by*3;dz+=bz*3;const dn=Math.hypot(dx,dy,dz)||1;dx/=dn;dy/=dn;dz/=dn;
+  const r0=Math.hypot(px,py-cy,pz)*1.01;
+  let x=px-nx*.012,y=py-ny*.012,z=pz-nz*.012;cl[0]=x;cl[1]=y;cl[2]=z;
+  for(let k=0;k<K;k++){const u=k/K,wg=Math.min(1,P.droop*Math.pow(u,1.2)*1.6)*(1-bl*.6);
+   const ex=dx*(1-wg),ey=dy*(1-wg)-wg,ez=dz*(1-wg),el=Math.hypot(ex,ey,ez)||1;
+   x+=ex/el*ds;y+=ey/el*ds;z+=ez/el*ds;
+   const ry=y-cy,rl=Math.hypot(x,ry,z);if(rl<r0){const f=r0/rl;x*=f;y=ry*f+cy;z*=f}
+   cl[3*k+3]=x;cl[3*k+4]=y;cl[3*k+5]=z}
+  // parallel-transport frame; U lies across the strand along the head surface, V along the normal
+  let tx=cl[3]-cl[0],ty=cl[4]-cl[1],tz=cl[5]-cl[2],tl=Math.hypot(tx,ty,tz)||1;tx/=tl;ty/=tl;tz/=tl;
+  let ux=ty*nz-tz*ny,uy=tz*nx-tx*nz,uz=tx*ny-ty*nx,ul=Math.hypot(ux,uy,uz);
+  if(ul<.1){ux=0;uy=tz;uz=-ty;ul=Math.hypot(ux,uy,uz);if(ul<.1){ux=1;uy=0;uz=0;ul=1}}
+  ux/=ul;uy/=ul;uz/=ul;
+  for(let k=0;k<=K;k++){
+   const a=3*Math.max(k-1,0),b=3*Math.min(k+1,K);
+   tx=cl[b]-cl[a];ty=cl[b+1]-cl[a+1];tz=cl[b+2]-cl[a+2];tl=Math.hypot(tx,ty,tz);
+   if(tl>1e-9){tx/=tl;ty/=tl;tz/=tl}else{tx=0;ty=-1;tz=0}
+   const d=ux*tx+uy*ty+uz*tz;ux-=d*tx;uy-=d*ty;uz-=d*tz;ul=Math.hypot(ux,uy,uz)||1;ux/=ul;uy/=ul;uz/=ul;
+   const vx=ty*uz-tz*uy,vy=tz*ux-tx*uz,vz=tx*uy-ty*ux;
+   const u01=k/K,rad=P.tipW+(P.rootW-P.tipW)*Math.pow(1-u01,P.profile);
+   let e=1;if(u01<.2){const t=u01/.2;e=t*t*(3-2*t)}
+   const ph=TAU*P.curlFreq*u01*L+R.rp[i],co=P.curlAmp*e*Math.cos(ph),si=P.curlAmp*e*Math.sin(ph);
+   const cx=cl[3*k]+ux*co+vx*si,cyy=cl[3*k+1]+uy*co+vy*si,cz=cl[3*k+2]+uz*co+vz*si;
+   let o=(s*(K+1)+k)*S*3;
+   for(let j=0;j<S;j++){const ca=CA[j]*rad,sa=SA[j]*rad*P.flat;
+    out[o++]=cx+ux*ca+vx*sa;out[o++]=cyy+uy*ca+vy*sa;out[o++]=cz+uz*ca+vz*sa}}}
+ pa.needsUpdate=true}
+
+// ---------- brush / comb ----------
+const ray=new THREE.Raycaster(),m2=new THREE.Vector2();let stroke=null;
+function hitAt(e){const r=renderer.domElement.getBoundingClientRect();
+ m2.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(m2,cam);return ray.intersectObject(head,false)[0]||null}
+function showCursor(h){if(!h||tool==='cam'){cursor.visible=false;return}
+ cursor.visible=true;cursor.position.copy(h.point).addScaledVector(h.face.normal,.004);
+ cursor.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),h.face.normal);cursor.scale.setScalar(P.brush)}
+function pushUndo(){undo.push({W:W.slice(),B:B.slice()});if(undo.length>25)undo.shift()}
+function doUndo(){const s=undo.pop();if(!s)return;W.set(s.W);B.set(s.B);paintColors();needBuild=true}
+function paintAt(q,val){const pa=head.geometry.attributes.position.array,r2=P.brush*P.brush;
+ for(let i=0;i<W.length;i++){const dx=pa[3*i]-q.x,dy=pa[3*i+1]-q.y,dz=pa[3*i+2]-q.z;if(dx*dx+dy*dy+dz*dz<r2)W[i]=val}}
+function comb(q,d,k){const r=P.brush;
+ for(const i of act){const dx=roots.p[3*i]-q.x,dy=roots.p[3*i+1]-q.y,dz=roots.p[3*i+2]-q.z,dist=Math.hypot(dx,dy,dz);if(dist>=r)continue;
+  let f=1-dist/r;f=f*f*(3-2*f)*k;
+  B[3*i]=B[3*i]*(1-f)+d.x*f;B[3*i+1]=B[3*i+1]*(1-f)+d.y*f;B[3*i+2]=B[3*i+2]*(1-f)+d.z*f}}
+function apply(h){const p=h.point,n=h.face.normal,last=stroke.last,pts=[];
+ if(last){const st=Math.max(1,Math.ceil(p.distanceTo(last)/(P.brush*.4)));for(let i=1;i<=st;i++)pts.push(last.clone().lerp(p,i/st))}else pts.push(p.clone());
+ if(tool==='comb'){
+  if(!last){stroke.last=p.clone();return}
+  const d=p.clone().sub(last);d.addScaledVector(n,-d.dot(n));const mag=d.length();if(mag<1e-5)return;d.normalize();
+  const k=Math.min(1,mag/(P.brush*.5))*P.combStrength;for(const q of pts)comb(q,d,k);dirty=true}
+ else{for(const q of pts)paintAt(q,tool==='add'?1:0);paintColors();needBuild=true}
+ stroke.last=p.clone()}
+view.addEventListener('pointerdown',e=>{if(tool==='cam'||!e.isPrimary)return;const h=hitAt(e);if(!h)return;
+ controls.enabled=false;view.setPointerCapture(e.pointerId);pushUndo();stroke={last:null};apply(h);showCursor(h)},{capture:true});
+view.addEventListener('pointermove',e=>{if(tool==='cam')return;const h=hitAt(e);showCursor(h);if(stroke&&h)apply(h)});
+const endStroke=()=>{stroke=null;controls.enabled=true};
+view.addEventListener('pointerup',endStroke);view.addEventListener('pointercancel',endStroke);
+
+// ---------- load head ----------
+async function loadFile(f){
+ const name=f.name.toLowerCase();let root;
+ if(name.endsWith('.obj'))root=new OBJLoader().parse(await f.text());
+ else{const buf=await f.arrayBuffer();root=(await new Promise((res,rej)=>new GLTFLoader().parse(buf,'',res,rej))).scene}
+ root.updateMatrixWorld(true);const v=[];
+ root.traverse(o=>{if(!o.isMesh)return;const g=o.geometry.index?o.geometry.toNonIndexed():o.geometry.clone();g.applyMatrix4(o.matrixWorld);
+  const a=g.attributes.position;for(let i=0;i<a.count;i++)v.push(a.getX(i),a.getY(i),a.getZ(i))});
+ if(!v.length)return alert('В файле нет полигонов');
+ let g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(v,3));
+ g=mergeVertices(g,1e-4);g.computeVertexNormals();g.computeBoundingBox();
+ const bb=g.boundingBox,c=bb.getCenter(new THREE.Vector3()),s=2/Math.max(...bb.getSize(new THREE.Vector3()).toArray());
+ g.translate(-c.x,-c.y,-c.z);g.scale(s,s,s);P.hugCy=0;setHead(g);gui.controllersRecursive().forEach(x=>x.updateDisplay())}
+const fileIn=document.getElementById('file');
+fileIn.onchange=()=>{if(fileIn.files[0])loadFile(fileIn.files[0]).catch(e=>alert('Не удалось загрузить: '+e.message));fileIn.value=''};
+
+// ---------- export ----------
+function save(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
+function exportMesh(kind){
+ if(needBuild)build();fill();const pos=hair.geometry.attributes.position.array,ind=hair.geometry.index.array,sc=P.exportScale;
+ if(!ind.length)return alert('Нет волос для экспорта');
+ if(kind==='obj'){const o=['# hair.obj'];for(let i=0;i<pos.length;i+=3)o.push(`v ${(pos[i]*sc).toFixed(4)} ${(pos[i+1]*sc).toFixed(4)} ${(pos[i+2]*sc).toFixed(4)}`);
+  for(let i=0;i<ind.length;i+=3)o.push(`f ${ind[i]+1} ${ind[i+1]+1} ${ind[i+2]+1}`);save(new Blob([o.join('\n')]),'hair.obj')}
+ else{const nt=ind.length/3,buf=new ArrayBuffer(84+50*nt),dv=new DataView(buf);dv.setUint32(80,nt,true);let o=84;
+  for(let t=0;t<nt;t++){const a=3*ind[3*t],b=3*ind[3*t+1],c=3*ind[3*t+2],p=[a,b,c].map(i=>[pos[i]*sc,pos[i+1]*sc,pos[i+2]*sc]);
+   const u=[p[1][0]-p[0][0],p[1][1]-p[0][1],p[1][2]-p[0][2]],w=[p[2][0]-p[0][0],p[2][1]-p[0][1],p[2][2]-p[0][2]];
+   let n=[u[1]*w[2]-u[2]*w[1],u[2]*w[0]-u[0]*w[2],u[0]*w[1]-u[1]*w[0]];const l=Math.hypot(...n)||1;n=n.map(x=>x/l);
+   for(const x of n){dv.setFloat32(o,x,true);o+=4}for(const q of p)for(const x of q){dv.setFloat32(o,x,true);o+=4}o+=2}
+  save(new Blob([buf]),'hair.stl')}}
+
+// ---------- presets (localStorage) ----------
+const KEY='hair_presets_v1',ps={name:'Моя причёска',sel:'—'};
+const store=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch{return{}}};
+function savePreset(){const name=ps.name.trim()||'Причёска',all=store(),par={...P};delete par.progress;
+ const mask=[];for(let i=0;i<W.length;i++)if(W[i]>.5)mask.push(i);
+ const cb=[];for(let i=0;i<NMAX;i++)if(B[3*i]||B[3*i+1]||B[3*i+2])cb.push(i,...[0,1,2].map(k=>+B[3*i+k].toFixed(3)));
+ all[name]={P:par,vc:W.length,mask:mask.length<40000?mask:null,comb:cb};
+ try{localStorage.setItem(KEY,JSON.stringify(all))}catch{alert('Не хватило места в браузере')}refreshPresets(name)}
+function loadPreset(){const d=store()[ps.sel];if(!d)return;pushUndo();
+ const prog=P.progress;Object.assign(P,d.P);P.progress=prog;if(P.seed!==roots.seed)sample();
+ if(d.mask&&d.vc===W.length){W.fill(0);d.mask.forEach(i=>W[i]=1);paintColors()}
+ B.fill(0);for(let k=0;k<d.comb.length;k+=4){const i=d.comb[k];B[3*i]=d.comb[k+1];B[3*i+1]=d.comb[k+2];B[3*i+2]=d.comb[k+3]}
+ gui.controllersRecursive().forEach(c=>c.updateDisplay());needBuild=true}
+function delPreset(){const all=store();delete all[ps.sel];localStorage.setItem(KEY,JSON.stringify(all));refreshPresets()}
+function refreshPresets(pick){selCtl=selCtl.options(['—',...Object.keys(store())]);ps.sel=pick||'—';selCtl.updateDisplay()}
+
+// ---------- UI ----------
+const gui=new GUI({title:'Прически',width:Math.min(300,innerWidth-24)});if(mobile)gui.close();
+const infoCtl=gui.add(info,'count').name('Прядей').disable();
+let fo=gui.addFolder('Голова');
+fo.add({f(){useSphere()}},'f').name('Сфера (тест)');
+fo.add({f(){fileIn.click()}},'f').name('Загрузить OBJ / GLB…');
+fo.add(P,'hugCy',-1,1,.01).name('Центр головы, Y');
+fo=gui.addFolder('Область роста');
+fo.add(P,'brush',.03,.6,.01).name('Размер кисти');
+fo.add({f(){pushUndo();W.fill(0);paintColors();needBuild=true}},'f').name('Очистить область');
+fo=gui.addFolder('Волосы');
+fo.add(P,'density',0,1,.01).name('Густота');
+fo.add(P,'length',.1,2,.01).name('Длина');
+fo.add(P,'spread',0,.9,.01).name('Разброс длины');
+fo.add(P,'rootW',.004,.08,.001).name('Ширина у корня');
+fo.add(P,'tipW',0,.04,.001).name('Ширина у кончика');
+fo.add(P,'profile',.5,4,.05).name('Профиль сужения');
+fo.add(P,'flat',.1,1,.01).name('Плоскость пряди');
+fo.add(P,'sides',3,8,1).name('Граней');
+fo.add(P,'segs',4,24,1).name('Сегментов');
+fo.add(P,'droop',0,1,.01).name('Опадание вниз');
+fo.add(P,'mode',{'По форме головы':'shape','По нормали':'normal','По вектору':'vector'}).name('Направление роста');
+fo.add(P,'vx',-1,1,.01).name('Вектор X');fo.add(P,'vy',-1,1,.01).name('Вектор Y');fo.add(P,'vz',-1,1,.01).name('Вектор Z');
+fo.add(P,'seed',1,999,1).name('Seed');
+fo.addColor(P,'rootColor').name('Цвет у корня');fo.addColor(P,'tipColor').name('Цвет у кончика');
+fo=gui.addFolder('Кучерявость');
+fo.add(P,'curlFreq',0,20,.1).name('Частота завитка');
+fo.add(P,'curlAmp',0,.12,.001).name('Амплитуда завитка');
+fo=gui.addFolder('Рост');
+fo.add(P,'growTime',1,30,.5).name('Время роста, с');
+const progCtl=fo.add(P,'progress',0,1,.001).name('Прогресс');
+fo=gui.addFolder('Причёсывание');
+fo.add(P,'combStrength',.05,1,.01).name('Сила расчёски');
+fo.add({f(){pushUndo();B.fill(0);dirty=true}},'f').name('Сбросить причёску');
+fo.add({f(){doUndo()}},'f').name('Отмена');
+fo=gui.addFolder('Пресеты причёсок');
+fo.add(ps,'name').name('Название');
+fo.add({f(){savePreset()}},'f').name('Сохранить');
+let selCtl=fo.add(ps,'sel',['—']).name('Сохранённые');
+fo.add({f(){loadPreset()}},'f').name('Применить');
+fo.add({f(){delPreset()}},'f').name('Удалить');
+fo=gui.addFolder('Экспорт');
+fo.add(P,'exportScale',1,500,1).name('Масштаб (радиус головы)');
+fo.add({f(){exportMesh('obj')}},'f').name('Скачать OBJ');
+fo.add({f(){exportMesh('stl')}},'f').name('Скачать STL');
+gui.onChange(e=>{if(e.property==='progress'){state.grow=P.progress;state.running=false;dirty=true}
+ else if(e.property==='seed'){sample();needBuild=true}else needBuild=true});
+refreshPresets();
+
+// bottom bar
+const bar=document.getElementById('bar'),hint=document.getElementById('hint'),btns={};
+const names={cam:'Камера',add:'Добавить',erase:'Стереть',comb:'Расчёска'};
+function setTool(t){tool=t;for(const k in btns)btns[k].classList.toggle('on',k===t);cursor.visible=false;
+ hint.textContent={cam:'Вращение камеры',add:'Кисть: рисуйте область роста',erase:'Кисть: стирайте область роста',comb:'Расчёска: ведите по голове'}[t]}
+function btn(label,fn,key){const b=document.createElement('button');b.textContent=label;b.onclick=fn;bar.appendChild(b);if(key)btns[key]=b}
+for(const k in names)btn(names[k],()=>setTool(k),k);
+bar.appendChild(document.createElement('i'));
+btn('Отмена',doUndo);
+bar.appendChild(document.createElement('i'));
+btn('Start',()=>{if(state.grow>=1){state.grow=0}state.running=true});
+btn('Pause',()=>{state.running=false});
+btn('Reset',()=>{state.running=false;state.grow=0;P.progress=0;progCtl.updateDisplay();dirty=true});
+setTool('cam');
+
+useSphere();
+let prev=performance.now();
+renderer.setAnimationLoop(t=>{const dt=Math.min(.1,(t-prev)/1000);prev=t;
+ if(state.running){state.grow=Math.min(1,state.grow+dt/P.growTime);if(state.grow>=1)state.running=false;P.progress=state.grow;progCtl.updateDisplay();dirty=true}
+ if(needBuild)build();if(dirty){fill();dirty=false}
+ controls.update();renderer.render(scene,cam)});
+</script></body></html>
