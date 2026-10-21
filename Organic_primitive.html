@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Живая структура из кубов</title>
+<style>
+html,body{margin:0;height:100%;background:#05060a;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+canvas{display:block}
+#st{position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:none;min-width:240px;max-width:90vw;background:#0b0e14ee;border:1px solid #2b4a7a;border-radius:8px;padding:8px 12px;color:#cfe0ff;font-size:13px;z-index:9}
+#stb{height:5px;background:#1a2438;border-radius:3px;margin-top:6px;overflow:hidden}
+#stf{display:block;height:100%;width:0;background:#3a8bff;transition:width .15s}
+#stf.ind{animation:ind 1s linear infinite}@keyframes ind{from{margin-left:-40%}to{margin-left:100%}}
+
+.lil-gui .startbtn{height:46px!important;width:100%!important;font-size:15px!important;font-weight:700!important;letter-spacing:.08em;border-radius:6px;background:#162033!important;border:1px solid #2b4a7a!important;color:#9db8e0!important;transition:all .2s}
+.lil-gui .startbtn .name{width:100%!important;text-align:center}
+.lil-gui .startbtn.run{background:#1b66f0!important;color:#fff!important;border-color:#6fb0ff!important;box-shadow:0 0 16px 4px rgba(50,130,255,.85);animation:glow 1.2s ease-in-out infinite}
+@keyframes glow{50%{box-shadow:0 0 6px 1px rgba(50,130,255,.5)}}
+.lil-gui .startc{height:auto!important;margin-top:8px;padding-bottom:4px}
+#hud{position:fixed;left:274px;bottom:calc(10px + env(safe-area-inset-bottom,0px));color:#8fa3b8;font-size:12px;pointer-events:none;line-height:1.5}
+#ta{position:fixed;left:274px;top:calc(12px + env(safe-area-inset-top,0px));width:260px;height:110px;display:none;background:#0b0e14;color:#9fb;border:1px solid #234;font:11px monospace}
+#lp{position:fixed;left:0;top:0;bottom:0;width:262px;overflow-y:auto;z-index:5}
+#lp .lil-gui.root{width:100%;max-width:100%}
+#modal{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;z-index:50}
+#modal>div{background:#0f1420;border:1px solid #2b4a7a;border-radius:10px;padding:18px 22px;color:#cfe0ff;max-width:340px;font-size:14px;line-height:1.5}
+#modal button{margin:6px 8px 0 0;padding:8px 16px;border-radius:6px;border:1px solid #2b4a7a;background:#162033;color:#cfe0ff;cursor:pointer;font-size:14px}
+#modal button.danger{background:#7a1f2b;border-color:#c0505f}
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="lp"></div>
+<div id="modal"><div><b>Сбросить всё?</b><p>Будут удалены структура, меш, загруженная модель, точки и все параметры. Откроется стартовая страница с плоскостью.</p><button class="danger" onclick="doReset()">Сбросить</button><button onclick="closeModal()">Отмена</button></div></div>
+<div id="st"><div id="stt"></div><div id="stb"><i id="stf"></i></div></div>
+<textarea id="ta" spellcheck="false"></textarea>
+<input type="file" id="f" accept=".obj,.glb,.gltf" hidden>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
+<script>
+// ===== Конфигурация (все параметры в одном объекте) =====
+const MODES=['Дерево','Плоскость','Сфера','Куб','Тор','Своя модель','Объём модели'];
+const cfg={mode:'Плоскость',area:'Плоскость',shape:'Куб',rndSeed:true,growth:1,paused:false,branch:.4,angle:70,random:.5,energy:50,size:.35,taper:.6,avoid:.6,seed:7,limit:12000,
+  wind:.2,windDir:0,density:.3,temp:20,light:1,lightAz:40,lightElev:55,guide:true,region:'Полость внутри',openSides:1,surfSide:'Внешняя',fill:.6,pers:.7,gap:0,wall:.3,decay:0,
+  modelMM:100,tmin:.5,tmax:5,mmesh:0,mthick:1,msm:5,showMesh:true,mix:false};
+const DEFAULT=JSON.parse(JSON.stringify(cfg));
+const PRESETS={
+ 'Дерево':{mode:'Дерево',branch:.16,angle:35,random:.2,density:.2,temp:15,taper:.7,wind:.15,size:.45,energy:80},
+ 'Дерево (трубки)':{mode:'Дерево',shape:'Трубки',branch:.16,angle:35,random:.2,density:.2,temp:15,taper:.8,wind:.15,size:.5,energy:80},
+ 'Корни в объёме (плотно)':{mode:'Объём модели',shape:'Куб',fill:.9,pers:.5,branch:.3,size:.28,energy:200,taper:.3,random:.3,limit:20000,angle:50,wall:.3,decay:0,tmin:.5,tmax:3},
+ 'Корни в объёме (редко)':{mode:'Объём модели',shape:'Трубки',fill:.15,pers:.85,branch:.25,size:.35,energy:200,taper:.5,random:.2,limit:6000,angle:60,wall:.2,decay:.4,tmin:.8,tmax:8},
+ 'Корневая система в полости':{mode:'Объём модели',region:'Полость внутри',shape:'Трубки',fill:.7,pers:.45,branch:.35,angle:55,random:.35,taper:.6,energy:200,size:.3,limit:15000,wall:.5,decay:.3,tmin:.5,tmax:6},
+ 'Куст':{mode:'Дерево',branch:.35,angle:50,random:.45,density:.25,energy:45,taper:.4,temp:22,size:.4},
+ 'Коралл':{mode:'Сфера',branch:.3,angle:45,random:.35,energy:55,density:.35,temp:28,size:.4},
+ 'Мох на плоскости':{mode:'Плоскость',branch:.4,angle:70,random:.5,energy:50,size:.35,temp:20,density:.3},
+ 'Кристалл':{mode:'Дерево',temp:-15,branch:.1,random:.1,angle:90,size:.4,density:.3,energy:50},
+ 'Массивный нарост':{mode:'Сфера',density:.9,branch:.15,size:.8,temp:30,energy:35,taper:.2,random:.3}
+};
+const Umm=()=>10/cfg.modelMM; // единиц сцены в 1 мм: 10 ед. = «Размер модели, мм»
+const Smin=()=>cfg.tmin*Umm(),Smax=()=>Math.max(cfg.tmax,cfg.tmin)*Umm(),clampT=s=>Math.min(Smax(),Math.max(Smin(),s)),thick=f=>Smin()+(Smax()-Smin())*Math.max(0,Math.min(1,f)),genF=()=>Math.max(.25,1-cfg.taper*.5); // genF: во сколько раз тоньше каждый следующий порядок ветвления
+const MAX=40000, TICK=.05, SIG=.3; // SIG: насколько быстро растёт требуемый зазор между ветками одного дерева (расходящиеся развилки)
+
+// ===== Генератор случайных чисел (seed) =====
+let _s=1;function seedRng(s){_s=(s>>>0)||1}
+function rnd(){_s|=0;_s=_s+0x6D2B79F5|0;let t=Math.imul(_s^_s>>>15,1|_s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}
+
+// ===== Сцена =====
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x05060a);scene.fog=new THREE.FogExp2(0x05060a,.012);
+const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,.1,300);camera.position.set(14,10,14);
+const controls=new THREE.OrbitControls(camera,renderer.domElement);controls.enableDamping=true;
+const amb=new THREE.HemisphereLight(0x8899bb,0x111118,.5);scene.add(amb);
+const sun=new THREE.DirectionalLight(0xffffff,1.5);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
+const fillL=new THREE.DirectionalLight(0x8fa8d8,.3);scene.add(fillL); // мягкая контровая подсветка: на рост не влияет
+Object.assign(sun.shadow.camera,{left:-22,right:22,top:22,bottom:-22,near:1,far:80});scene.add(sun);
+const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({roughness:.55,metalness:.1}),MAX);
+mesh.castShadow=mesh.receiveShadow=true;mesh.frustumCulled=false;mesh.count=0;
+mesh.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(MAX*3),3);scene.add(mesh);
+const tubeMesh=new THREE.InstancedMesh(new THREE.CylinderGeometry(1,1,1,8,1,true),mesh.material,MAX);tubeMesh.castShadow=true;tubeMesh.frustumCulled=false;tubeMesh.count=0;tubeMesh.visible=false;
+tubeMesh.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(MAX*3),3);scene.add(tubeMesh);
+let guide=null;
+// ===== Формы элементов =====
+const SHAPES=['Куб','Сфера','Пирамида','Капсула','Октаэдр','Трубки'];
+function makeGeo(n){
+ if(n==='Сфера')return new THREE.IcosahedronGeometry(.5,1);
+ if(n==='Пирамида')return new THREE.ConeGeometry(.75,1,4).rotateY(Math.PI/4);
+ if(n==='Октаэдр')return new THREE.OctahedronGeometry(.7);
+ if(n==='Трубки')return new THREE.IcosahedronGeometry(.5,2); // узлы-сферы + трубки между ними
+ if(n==='Капсула'){const pts=[],r=.3,h=.25;
+  for(let i=0;i<=6;i++){const a=-Math.PI/2+i*Math.PI/12;pts.push(new THREE.Vector2(Math.max(0,Math.cos(a)*r),-h+Math.sin(a)*r))}
+  for(let i=0;i<=6;i++){const a=i*Math.PI/12;pts.push(new THREE.Vector2(Math.max(0,Math.cos(a)*r),h+Math.sin(a)*r))}
+  return new THREE.LatheGeometry(pts,10)}
+ return new THREE.BoxGeometry(1,1,1);
+}
+function applyShape(){const o=mesh.geometry;mesh.geometry=makeGeo(cfg.shape);o.dispose();tubeMesh.visible=cfg.shape==='Трубки'&&!(meshObj&&cfg.showMesh)}
+// ===== Статус-бар сохранения =====
+let stT,busy=false;const tk=()=>new Promise(r=>setTimeout(r,0));
+function status(t,p,hide){const s=document.getElementById('st'),f=document.getElementById('stf');clearTimeout(stT);s.style.display='block';
+ document.getElementById('stt').textContent=t;f.style.width=(p==null?40:p)+'%';f.className=p==null?'ind':'';if(hide)stT=setTimeout(()=>s.style.display='none',4000)}
+let DLp=null; // capability запрашиваем заранее, чтобы не ждать при клике
+function getDL(){if(DLp)return DLp;if(!(window.claude&&window.claude.use))return Promise.resolve(null);return DLp=window.claude.use('downloads').catch(()=>null)}
+getDL();
+function fallbackSave(name,data){ // вне приложения Claude: обычная ссылка на скачивание
+ const real=name.replace(/\.(obj|stl)\.txt$/,'.$1'),isImg=/\.png$/.test(real),url=URL.createObjectURL(data instanceof Blob?data:new Blob([data]));
+ status('',100);
+ document.getElementById('stt').innerHTML='<span onclick="this.parentNode.parentNode.style.display=\'none\'" style="cursor:pointer;float:right;margin-left:12px">✕</span>Файл готов: <a download="'+real+'" href="'+url+'" style="color:#7db4ff">Скачать '+real+'</a>'+(isImg?'<br><img src="'+url+'" style="max-width:220px;margin-top:6px;border-radius:4px" alt="">':'');
+}
+async function saveFile(name,data){ // общий путь сохранения через capability downloads
+ status('Ожидание подтверждения сохранения…',null);
+ try{const d=await getDL();
+  if(!d){fallbackSave(name,data);return 'ok'}
+  await d.save({filename:name,data});status('Сохранено: '+name+' ✓',100,true);return 'ok'}
+ catch(e){const c=e&&e.code;status(c==='declined'?'Сохранение отменено':'Ошибка сохранения'+(c?' ('+c+')':''),100,true);return c==='declined'?'declined':'err'}
+}
+async function savePNG(){ // PNG 2× для референсов
+ if(busy)return;busy=true;
+ try{status('Рендер кадра 2×…',20);await tk();
+  const pr=renderer.getPixelRatio();renderer.setPixelRatio(2);renderer.setSize(innerWidth,innerHeight);renderer.render(scene,camera);
+  const b=await new Promise(r=>renderer.domElement.toBlob(r,'image/png'));
+  renderer.setPixelRatio(pr);renderer.setSize(innerWidth,innerHeight);
+  if(!b){status('Не удалось создать PNG',100,true);return}
+  status('Кодирование PNG…',70);await tk();await saveFile('organism.png',b)
+ }finally{busy=false}
+}
+// ===== Экспорт OBJ (текущие позиции, поворот и размер всех элементов) =====
+async function objPart(ms,out,off,N,tot,base){
+ const geo=ms.geometry,pos=geo.attributes.position,idx=geo.index,m=new THREE.Matrix4(),v=new THREE.Vector3();
+ for(let i=0;i<N;i++){
+  if(i%150===0){status('Сборка модели…',Math.round((base+i)/tot*85));await tk()}
+  ms.getMatrixAt(i,m);
+  for(let k=0;k<pos.count;k++){v.fromBufferAttribute(pos,k).applyMatrix4(m);out.push('v '+v.x.toFixed(4)+' '+v.y.toFixed(4)+' '+v.z.toFixed(4))}
+  const nf=idx?idx.count:pos.count;
+  for(let k=0;k<nf;k+=3){const a=idx?idx.getX(k):k,b=idx?idx.getX(k+1):k+1,c=idx?idx.getX(k+2):k+2;out.push('f '+(a+off)+' '+(b+off)+' '+(c+off))}
+  off+=pos.count;
+ }
+ return off}
+async function exportOBJ(){
+ if(busy)return;busy=true;
+ try{status('Сборка модели…',0);await tk();
+  const N=org.n,parts=tubeMesh.visible?[mesh,tubeMesh]:[mesh],out=['# Living cube organism','o organism'];let off=1;
+  for(let j=0;j<parts.length;j++)off=await objPart(parts[j],out,off,N,N*parts.length,N*j);
+  status('Подготовка файла…',90);await tk();
+  const text=out.join('\n');await saveFile('organism.obj.txt',new Blob([text]));
+ }finally{busy=false}
+}
+
+// ===== Среда =====
+class Environment{
+ static tn(){return(cfg.temp+20)/60}
+ static windVec(){const a=cfg.windDir*Math.PI/180;return new THREE.Vector3(Math.cos(a),0,Math.sin(a))}
+ static lightDir(){const az=cfg.lightAz*Math.PI/180,el=cfg.lightElev*Math.PI/180;
+  return new THREE.Vector3(Math.cos(az)*Math.cos(el),Math.sin(el),Math.sin(az)*Math.cos(el))}
+ static apply(){const L=Environment.lightDir();sun.position.copy(L).multiplyScalar(40);sun.intensity=cfg.light*1.5;amb.intensity=.15+cfg.light*.35;fillL.position.set(-L.x*40,Math.max(6,L.y*14),-L.z*40);fillL.intensity=.26+.1*Math.min(1.5,cfg.light)}
+}
+
+// ===== Пространственная хэш-сетка =====
+class SpatialHash{
+ constructor(){this.m=new Map()}
+ key(p,c){return(Math.floor(p.x/c)*73856093)^(Math.floor(p.y/c)*19349663)^(Math.floor(p.z/c)*83492791)}
+ get(p,c){return this.m.get(this.key(p,c))||0}
+ add(p,c){const k=this.key(p,c);this.m.set(k,(this.m.get(k)||0)+1)}
+ clear(){this.m.clear()}
+}
+
+// ===== Проекция на поверхность примитива =====
+let SN=new THREE.Vector3(0,1,0);
+// ===== Точка роста и МИКС: клик по поверхности направляющей =====
+let SEEDPT=null,SEEDN=null,picking=null,pickCtl=null,mixCtl=null,down=null,startBtn=null,MIXPTS=[],mixMk=new THREE.Group();scene.add(mixMk);
+const marker=new THREE.Mesh(new THREE.SphereGeometry(.18,12,8),new THREE.MeshBasicMaterial({color:0x4aa3ff}));marker.visible=false;scene.add(marker);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(400,400).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({visible:false}));scene.add(ground);
+function setPickNames(){if(pickCtl)pickCtl.name(picking==='seed'?'Кликните по поверхности…':'Задать точку роста');if(mixCtl)mixCtl.name(cfg.mix?'МИКС: включён (кликайте — точки)':'МИКС: добавить структуру')}
+function togglePick(){picking=picking==='seed'?null:'seed';if(cfg.mix&&picking==='seed')cfg.mix=false;setPickNames()}
+function clearPick(){SEEDPT=null;org.reset()}
+function refreshMix(){scene.remove(mixMk);mixMk=new THREE.Group();scene.add(mixMk);for(const q of MIXPTS){const m=new THREE.Mesh(new THREE.SphereGeometry(.15,10,8),new THREE.MeshBasicMaterial({color:0xffa040}));m.position.copy(q.p);mixMk.add(m)}}
+function toggleMix(){cfg.mix=!cfg.mix;picking=cfg.mix?'mix':null;if(!cfg.mix){MIXPTS=[];refreshMix()}setPickNames();
+ status(cfg.mix?'МИКС: кликайте по детали, чтобы поставить точки, и нажмите «Старт» — новая структура добавится к текущей':'МИКС выключен',100,true)}
+renderer.domElement.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY]});
+renderer.domElement.addEventListener('pointerup',e=>{ // клик без перетаскивания камеры
+ if(!picking||!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>5)return;
+ const r=new THREE.Raycaster();r.setFromCamera(new THREE.Vector2(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1),camera);
+ const h=r.intersectObject(guide||ground)[0];if(!h)return;const nr=h.face?h.face.normal.clone():null;
+ if(picking==='seed'){SEEDPT=h.point.clone();SEEDN=nr;togglePick();org.reset()}else{MIXPTS.push({p:h.point.clone(),n:nr});refreshMix()}
+});
+// ===== Своя модель как направляющая (.obj/.glb) =====
+const CUSTOM={geo:null,tris:[],grid:new Map};
+function nearestCustom(p){
+ let best=null,bd=1e9,bt=null;const q=new THREE.Vector3();
+ const scan=l=>{for(const t of l){t.closestPointToPoint(p,q);const d=q.distanceToSquared(p);if(d<bd){bd=d;best=q.clone();bt=t}}};
+ const cx=Math.floor(p.x),cy=Math.floor(p.y),cz=Math.floor(p.z);
+ for(let x=cx-1;x<=cx+1;x++)for(let y=cy-1;y<=cy+1;y++)for(let z=cz-1;z<=cz+1;z++){const l=CUSTOM.grid.get(x+','+y+','+z);if(l)scan(l)}
+ if(!best)scan(CUSTOM.tris);
+ bt.getNormal(SN);if(!SN.lengthSq())SN.set(0,1,0);if(SN.dot(p.clone().sub(best))<0)SN.negate();
+ return best;
+}
+function setModelFromObject(obj){
+  const P=[];obj.updateMatrixWorld(true);
+  obj.traverse(o=>{if(!o.isMesh)return;const p=o.geometry.attributes.position,ix=o.geometry.index,v=i=>new THREE.Vector3().fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld),n=ix?ix.count:p.count;
+   for(let k=0;k+2<n;k+=3)P.push(v(ix?ix.getX(k):k),v(ix?ix.getX(k+1):k+1),v(ix?ix.getX(k+2):k+2))});
+  if(!P.length)return;
+  const bb=new THREE.Box3().setFromPoints(P),c=bb.getCenter(new THREE.Vector3()),sc=10/Math.max(...bb.getSize(new THREE.Vector3()).toArray());
+  P.forEach(q=>q.sub(c).multiplyScalar(sc)); // нормализуем до ~10 единиц
+  CUSTOM.tris=[];CUSTOM.grid.clear();
+  for(let i=0;i<P.length;i+=3){const t=new THREE.Triangle(P[i],P[i+1],P[i+2]);CUSTOM.tris.push(t);const b=new THREE.Box3().setFromPoints([P[i],P[i+1],P[i+2]]);
+   for(let x=Math.floor(b.min.x);x<=Math.floor(b.max.x);x++)for(let y=Math.floor(b.min.y);y<=Math.floor(b.max.y);y++)for(let z=Math.floor(b.min.z);z<=Math.floor(b.max.z);z++){const k=x+','+y+','+z;let l=CUSTOM.grid.get(k);if(!l)CUSTOM.grid.set(k,l=[]);l.push(t)}}
+  CUSTOM.geo=new THREE.BufferGeometry().setFromPoints(P);
+  {const T=new Float32Array(P.length*3);P.forEach((q,i)=>{T[i*3]=q.x;T[i*3+1]=q.y;T[i*3+2]=q.z});buildAllow(T)}
+  SEEDPT=null;cfg.area=ALLOW.cav?AREAS[5]:AREAS[6];applyArea();ui.sync();org.reset();
+  status(ALLOW.cav?'Модель загружена. '+(ALLOW.how==='оболочка'?'Замкнутая оболочка: внутри пустой объём ('+ALLOW.cavCnt+' вокс.)':'Найдена полость между стенками ('+ALLOW.cavCnt+' вокс.)')+'. Выберите «Режим роста» и нажмите «Старт»':'Модель загружена. Полость не найдена: режим «Объём модели» будет заполнять объём внутри модели',100,true);
+}
+function loadModel(file){
+ const ext=file.name.split('.').pop().toLowerCase(),rd=new FileReader(),done=setModelFromObject;
+ rd.onload=()=>{try{ext==='obj'?done(new THREE.OBJLoader().parse(rd.result)):new THREE.GLTFLoader().parse(rd.result,'',g=>done(g.scene),()=>{})}catch(e){}};
+ ext==='obj'?rd.readAsText(file):rd.readAsArrayBuffer(file);
+}
+function surf(p){const m=MODES.indexOf(cfg.mode);
+ if(m===5&&CUSTOM.tris.length){const q=nearestCustom(p);if(cfg.surfSide==='Внутренняя')faceCavity(q);return q}
+ if(m===1||m===5){SN.set(0,1,0);return new THREE.Vector3(p.x,0,p.z)}
+ if(m===2){SN=p.clone().normalize();if(!SN.lengthSq())SN.set(0,1,0);return SN.clone().multiplyScalar(4)}
+ if(m===3){const h=3,a=[Math.abs(p.x),Math.abs(p.y),Math.abs(p.z)],ax=a.indexOf(Math.max(...a));
+  const q=[p.x,p.y,p.z].map(v=>Math.max(-h,Math.min(h,v)));q[ax]=Math.sign([p.x,p.y,p.z][ax]||1)*h;
+  SN.set(0,0,0).setComponent(ax,Math.sign(q[ax]));return new THREE.Vector3(q[0],q[1],q[2])}
+ if(m===4){const c=new THREE.Vector3(p.x,0,p.z);if(!c.lengthSq())c.set(1,0,0);c.normalize().multiplyScalar(4);
+  SN=p.clone().sub(c);if(!SN.lengthSq())SN.set(0,1,0);SN.normalize();return c.add(SN.clone().multiplyScalar(1.5))}
+ return p.clone();
+}
+
+// ===== Объём модели: сетка «разрешённых» вокселей (полость сосуда / внутри оболочки) =====
+function voxelize(T,o,h,nx,ny,nz){const ins=new Uint8Array(nx*ny*nz),nt=T.length/9,bins=new Array(ny*nz);
+ for(let t=0;t<nt;t++){const b=t*9,y0=Math.min(T[b+1],T[b+4],T[b+7]),y1=Math.max(T[b+1],T[b+4],T[b+7]),z0=Math.min(T[b+2],T[b+5],T[b+8]),z1=Math.max(T[b+2],T[b+5],T[b+8]),
+   j0=Math.max(0,Math.floor((y0-o.y)/h-.5)-1),j1=Math.min(ny-1,Math.ceil((y1-o.y)/h-.5)+1),k0=Math.max(0,Math.floor((z0-o.z)/h-.5)-1),k1=Math.min(nz-1,Math.ceil((z1-o.z)/h-.5)+1);
+  for(let k=k0;k<=k1;k++)for(let j=j0;j<=j1;j++)(bins[j+ny*k]||(bins[j+ny*k]=[])).push(t)}
+ for(let k=0;k<nz;k++)for(let j=0;j<ny;j++){const L=bins[j+ny*k];if(!L)continue;const y=o.y+(j+.5)*h+1.3e-4*h,z=o.z+(k+.5)*h+.7e-4*h,xs=[];
+  for(const t of L){const b=t*9,ay=T[b+1],by=T[b+4],cy=T[b+7],az=T[b+2],bz=T[b+5],cz=T[b+8],d=(by-ay)*(cz-az)-(cy-ay)*(bz-az);if(Math.abs(d)<1e-12)continue;
+   const u=((y-ay)*(cz-az)-(cy-ay)*(z-az))/d,v=((by-ay)*(z-az)-(y-ay)*(bz-az))/d;
+   if(u>=0&&v>=0&&u+v<=1)xs.push(T[b]+u*(T[b+3]-T[b])+v*(T[b+6]-T[b]))}
+  xs.sort((a,b)=>a-b);
+  for(let q=0;q+1<xs.length;q+=2){const i0=Math.max(0,Math.ceil((xs[q]-o.x)/h-.5)),i1=Math.min(nx-1,Math.floor((xs[q+1]-o.x)/h-.5));for(let i=i0;i<=i1;i++)ins[i+nx*(j+ny*k)]=1}}
+ return ins}
+const ALLOW={g:null,ins:null,srf:null,hit:null,cav:null,o:null,h:1,nx:0,ny:0,nz:0,cen:null,cavCen:null,wallIdx:null,note:'',cnt:0,cavCnt:0};
+function markSurface(T,o,h,nx,ny,nz){const srf=new Uint8Array(nx*ny*nz); // воксели, через которые проходит поверхность (работает и для открытых/тонких мешей)
+ for(let t=0;t<T.length;t+=9){const ax=T[t],ay=T[t+1],az=T[t+2],bx=T[t+3],by=T[t+4],bz=T[t+5],cx=T[t+6],cy=T[t+7],cz=T[t+8],
+   L=Math.max(Math.hypot(bx-ax,by-ay,bz-az),Math.hypot(cx-ax,cy-ay,cz-az),Math.hypot(cx-bx,cy-by,cz-bz)),n=Math.max(1,Math.ceil(L/(h*.5)));
+  for(let i=0;i<=n;i++)for(let j=0;j<=n-i;j++){const u=i/n,v=j/n,I=Math.floor((ax+(bx-ax)*u+(cx-ax)*v-o.x)/h),J=Math.floor((ay+(by-ay)*u+(cy-ay)*v-o.y)/h),K=Math.floor((az+(bz-az)*u+(cz-az)*v-o.z)/h);
+   if(I>=0&&J>=0&&K>=0&&I<nx&&J<ny&&K<nz)srf[I+nx*(J+ny*K)]=1}}
+ return srf}
+function hitCount(srf,nx,ny,nz){const hit=new Uint8Array(srf.length); // в скольких из 6 осевых направлений от вокселя есть поверхность
+ const run=(st0,n,step,base)=>{let seen=false,q=base;for(let i=0;i<n;i++,q+=step){if(srf[q])seen=true;else if(seen)hit[q]++}};
+ for(let k=0;k<nz;k++)for(let j=0;j<ny;j++){const b=nx*(j+ny*k);run(0,nx,1,b);run(0,nx,-1,b+nx-1)}
+ for(let k=0;k<nz;k++)for(let i=0;i<nx;i++){const b=i+nx*ny*k;run(0,ny,nx,b);run(0,ny,-nx,b+nx*(ny-1))}
+ for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){const b=i+nx*j;run(0,nz,nx*ny,b);run(0,nz,-nx*ny,b+nx*ny*(nz-1))}
+ return hit}
+function largestComp(g,nx,ny,nz){const N=g.length,lab=new Int32Array(N),sz=[0],st=new Int32Array(N);let L=0;
+ for(let s0=0;s0<N;s0++){if(!g[s0]||lab[s0])continue;L++;let sp=0,c=0;st[sp++]=s0;lab[s0]=L;
+  while(sp){const q=st[--sp];c++;const i=q%nx,j=((q/nx)|0)%ny,k=(q/(nx*ny))|0;
+   for(const[di,dj,dk]of[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,-1],[0,0,1]]){const a=i+di,b=j+dj,c2=k+dk;if(a<0||b<0||c2<0||a>=nx||b>=ny||c2>=nz)continue;const n=a+nx*(b+ny*c2);if(g[n]&&!lab[n]){lab[n]=L;st[sp++]=n}}}
+  sz[L]=c}
+ let best=0,bc=0;for(let l=1;l<=L;l++)if(sz[l]>bc){bc=sz[l];best=l}
+ const out=new Uint8Array(N);for(let i=0;i<N;i++)if(lab[i]===best)out[i]=1;return{g:out,cnt:bc,comps:L}}
+function centerOf(g){const A=ALLOW,{nx,ny,nz}=A,N=g.length;let sx=0,sy=0,sz=0,c=0;
+ for(let i=0;i<N;i++)if(g[i]){sx+=i%nx;sy+=((i/nx)|0)%ny;sz+=(i/(nx*ny))|0;c++}
+ if(!c)return null;const cx=sx/c,cy=sy/c,cz=sz/c;let best=1e18,bi=0;
+ for(let i=0;i<N;i++)if(g[i]){const d=(i%nx-cx)**2+(((i/nx)|0)%ny-cy)**2+(((i/(nx*ny))|0)-cz)**2;if(d<best){best=d;bi=i}}
+ return new THREE.Vector3(A.o.x+(bi%nx+.5)*A.h,A.o.y+(((bi/nx)|0)%ny+.5)*A.h,A.o.z+(((bi/(nx*ny))|0)+.5)*A.h)}
+function buildAllow(T){let mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];for(let i=0;i<T.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],T[i+d]);mx[d]=Math.max(mx[d],T[i+d])}
+ const h=Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2])/90,nx=Math.ceil((mx[0]-mn[0])/h)+2,ny=Math.ceil((mx[1]-mn[1])/h)+2,nz=Math.ceil((mx[2]-mn[2])/h)+2,o={x:mn[0]-h,y:mn[1]-h,z:mn[2]-h};
+ Object.assign(ALLOW,{o,h,nx,ny,nz});ALLOW.ins=voxelize(T,o,h,nx,ny,nz);ALLOW.srf=markSurface(T,o,h,nx,ny,nz);ALLOW.hit=hitCount(ALLOW.srf,nx,ny,nz);applyAllow()}
+function applyAllow(){const A=ALLOW;if(!A.ins)return;const{nx,ny,nz,ins,srf,hit}=A,N=nx*ny*nz,K=6-cfg.openSides;A.note='';
+ // полость: пустые воксели, «закрытые» поверхностью минимум с K из 6 сторон (K=5 допускает открытый верх сосуда)
+ const cand=new Uint8Array(N);for(let i=0;i<N;i++)if(!srf[i]&&!ins[i]&&hit[i]>=K)cand[i]=1;
+ let lc=largestComp(cand,nx,ny,nz);A.cav=lc.cnt>=50?lc.g:null;A.how='стенки';
+ let insCnt=0;for(let i=0;i<N;i++)if(ins[i])insCnt++;
+ if(!A.cav&&insCnt>=50){lc=largestComp(ins,nx,ny,nz);A.cav=lc.g;A.how='оболочка'} // замкнутая оболочка (сфера и т.п.): пустота — это её внутренний объём
+ A.cavCnt=A.cav?lc.cnt:0;A.cavCen=A.cav?centerOf(A.cav):null;
+ if(cfg.region==='Полость внутри'){if(A.cav){A.g=A.cav}else{A.g=ins;A.note='Полость не найдена: модель слишком открыта или повреждена — использую объём внутри модели'}}
+ else{A.g=ins;if(!insCnt&&A.cav){A.g=A.cav;A.note='Модель не замкнута — использую полость'}}
+ A.cnt=0;for(let i=0;i<N;i++)if(A.g[i])A.cnt++;A.cen=centerOf(A.g);
+ {const w=[]; // воксели рабочей области, прилегающие к стенке: сюда целятся корни, идущие по стенке
+  for(let i=0;i<N;i++)if(A.g[i]){const x=i%nx,y=((i/nx)|0)%ny,z=(i/(nx*ny))|0;
+   for(const[di,dj,dk]of[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,-1],[0,0,1]]){const a=x+di,b=y+dj,c=z+dk;if(a>=0&&b>=0&&c>=0&&a<nx&&b<ny&&c<nz&&srf[a+nx*(b+ny*c)]){w.push(i);break}}}
+  A.wallIdx=Int32Array.from(w)}}
+function inA(x,y,z,g){const A=ALLOW;g=g||A.g;if(!g)return false;const i=Math.floor((x-A.o.x)/A.h),j=Math.floor((y-A.o.y)/A.h),k=Math.floor((z-A.o.z)/A.h);
+ return i>=0&&j>=0&&k>=0&&i<A.nx&&j<A.ny&&k<A.nz&&g[i+A.nx*(j+A.ny*k)]===1}
+function faceCavity(q){if(!ALLOW.cav)return;const e=cfg.size*1.2,a=q.clone().addScaledVector(SN,e),b=q.clone().addScaledVector(SN,-e); // нормаль — в сторону полости
+ if(!inA(a.x,a.y,a.z,ALLOW.cav)&&inA(b.x,b.y,b.z,ALLOW.cav))SN.negate()}
+function volSeed(pt,nr){if(pt){const n=nr||new THREE.Vector3(0,1,0);for(const k of[0,1.5,-1.5,3,-3,5,-5,8,-8]){const q=pt.clone().addScaledVector(n,k*cfg.size);if(inA(q.x,q.y,q.z))return q}}
+ return ALLOW.cen?ALLOW.cen.clone():new THREE.Vector3()}
+const rv=()=>{const v=new THREE.Vector3(rnd()-.5,rnd()-.5,rnd()-.5);if(v.lengthSq()<1e-6)v.set(0,1,0);return v.normalize()};
+const AREAS=['Дерево','Плоскость','Сфера','Куб','Тор','Модель: полость внутри','Модель: внешняя поверхность','Модель: внутренняя поверхность'];
+function applyArea(){const a=cfg.area;
+ if(a.startsWith('Модель')){if(!CUSTOM.tris.length)status('Сначала загрузите модель (.obj/.glb)',100,true);
+  if(a===AREAS[5]){cfg.mode='Объём модели'}else{cfg.mode='Своя модель';cfg.surfSide=a===AREAS[7]?'Внутренняя':'Внешняя'}
+  cfg.region='Полость внутри';applyAllow();if(ALLOW.note)status(ALLOW.note,100,true)}
+ else cfg.mode=a}
+function syncArea(){cfg.area=cfg.mode==='Объём модели'?AREAS[5]:cfg.mode==='Своя модель'?(cfg.surfSide==='Внутренняя'?AREAS[7]:AREAS[6]):cfg.mode}
+
+// ===== Организм =====
+class Tip{constructor(p,d,e){this.p=p;this.d=d;this.e=e;this.g=1;this.w=false}}
+class Organism{
+ constructor(){this.hash=new SpatialHash();this.reset()}
+ reset(){
+  seedRng(cfg.seed);this.hash.clear();this.n=0;this.acc=0;this.time=0;this.tips=[];this.vh=new Map();this.big=[];this.vcell=0;this.stale=0;this.pn=-1;this.tq=0;this.lk='';clearMeshObj();
+  this.P=new Float32Array(MAX*3);this.S=new Float32Array(MAX);this.U=new Float32Array(MAX);
+  this.R=new Float32Array(MAX*3);this.Q=new Int32Array(MAX).fill(-1);this.fc=new Int32Array(MAX).fill(-1);this.ns=new Int32Array(MAX).fill(-1);this.mark=new Int32Array(MAX);this.la=new Int32Array(MAX);this.dep=new Int16Array(MAX);this.gen=0;this.W=new Float32Array(MAX*3);this.Z=new Float32Array(MAX);this.A=new Float32Array(MAX);this.J=new Float32Array(MAX);
+  const m=MODES.indexOf(cfg.mode);
+  let p=new THREE.Vector3(0,0,0),d=new THREE.Vector3(0,1,0);
+  if(m===6){if(ALLOW.g&&ALLOW.cen){p=volSeed(SEEDPT,SEEDN);d=rv()}else status('Загрузите замкнутую модель: для режима «Объём модели» она обязательна',100,true)}
+  else if(m>0){p=surf((SEEDPT?SEEDPT.clone():(m===5&&cfg.surfSide==='Внутренняя'&&ALLOW.cavCen?ALLOW.cavCen.clone():new THREE.Vector3([0,0,0,5.5,0][m-1]||0,[0,10,10,0,100][m-1]||0,0))));p.add(SN.clone().multiplyScalar(cfg.size*.5));
+   d=new THREE.Vector3(rnd()-.5,rnd()-.5,rnd()-.5);d.addScaledVector(SN,-d.dot(SN)).normalize()}
+  else if(SEEDPT){p=SEEDPT.clone()}
+  this.add(p,m===6?thick(1):clampT(cfg.size),0);this.tips.push(new Tip(p.clone(),d,cfg.energy));this.tips[0].i=0;this.tips[0].w=m===6&&rnd()<cfg.wall;
+  controls.target.set(0,m===0?6:(m===6?0:2),0);buildGuide();marker.visible=!!SEEDPT;if(SEEDPT)marker.position.copy(SEEDPT);this.run=false;
+ }
+ add(p,s,u,q=-1){const i=this.n++;this.Q[i]=q;if(q>=0){this.ns[i]=this.fc[q];this.fc[q]=i}this.P.set([p.x,p.y,p.z],i*3);this.S[i]=s;this.U[i]=u;this.A[i]=0;this.J[i]=rnd();
+  this.R.set([rnd()*.5,rnd()*Math.PI,rnd()*.5],i*3);this.color(i)}
+ color(i){const c=new THREE.Color();c.setHSL(.62-.58*Environment.tn()+(this.J[i]-.5)*.08,.65,.2+.5*this.U[i]);mesh.setColorAt(i,c);tubeMesh.setColorAt(i,c)}
+ recolor(){for(let i=0;i<this.n;i++)this.color(i);mesh.instanceColor.needsUpdate=true}
+ tick(){
+  const tn=Environment.tn(),dens=cfg.density,m=MODES.indexOf(cfg.mode);
+  if(m===6)return this.tickVol();
+  const sp=Math.min(1,(.25+1.1*tn)*(1-dens*.6)),bf=cfg.branch*(.4+1.2*tn)*(1-dens*.7);
+  const sz=cfg.size*(.65+.7*tn)*(1+dens*.9),wv=Environment.windVec(),L=Environment.lightDir();
+  const cost=1+Math.max(0,1-cfg.light)*2,cell=cfg.size*.8,next=[];
+  for(const t of this.tips){
+   if(rnd()>sp){next.push(t);continue}
+   const d=t.d,r=cfg.random;
+   d.x+=(rnd()-.5)*r*2;d.y+=(rnd()-.5)*r*2;d.z+=(rnd()-.5)*r*2;
+   if(m===0){d.y+=.1+.06*cfg.light;d.addScaledVector(L,.06*cfg.light)}   // фототропизм
+   d.addScaledVector(wv,cfg.wind*.35*(1-dens*.5));                          // ветер
+   if(tn<.33){const ax=Math.abs(d.x)>Math.abs(d.y)?(Math.abs(d.x)>Math.abs(d.z)?'x':'z'):(Math.abs(d.y)>Math.abs(d.z)?'y':'z');
+    const q=new THREE.Vector3();q[ax]=Math.sign(d[ax]);d.lerp(q,(.33-tn)*2)}  // кристаллы на холоде
+   if(m>0){const n=surf(t.p)&&SN.clone();d.addScaledVector(n,-d.dot(n))}
+   d.normalize();
+   const s=clampT(sz*Math.max(.18,Math.pow(t.e/cfg.energy,cfg.taper)));
+   t.p.addScaledVector(d,s*.75);
+   if(m>0){const q=surf(t.p);t.p.copy(q).addScaledVector(SN,s*(.4+rnd()*.3));if(m===5&&ALLOW.cav&&((cfg.surfSide==='Внутренняя')!==inA(t.p.x,t.p.y,t.p.z,ALLOW.cav)))continue}
+   let dead=false;const c=this.hash.get(t.p,cell);
+   if(c>=2&&rnd()<cfg.avoid){d.x+=rnd()-.5;d.y+=rnd()-.5;d.z+=rnd()-.5;d.normalize();if(c>=4&&cfg.avoid>.3)dead=true}
+   t.e-=cost;
+   if(this.n<Math.min(cfg.limit,MAX)){this.hash.add(t.p,cell);this.add(t.p,s,1-Math.max(0,t.e)/cfg.energy,t.i);t.i=this.n-1}else dead=true;
+   if(dead||t.e<=0)continue;
+   next.push(t);
+   if(rnd()<bf&&this.tips.length+next.length<500){
+    const k=1+(rnd()<.3?1:0);
+    for(let j=0;j<k;j++){const ax=d.clone().cross(new THREE.Vector3(rnd()-.5,rnd()-.5,rnd()-.5)).normalize();
+     const nd=d.clone().applyAxisAngle(ax,cfg.angle*Math.PI/180*(.6+rnd()*.8));const nt=new Tip(t.p.clone(),nd,t.e*.85);nt.i=t.i;next.push(nt)}}
+  }
+  this.tips=next;if(!next.length||this.n>=Math.min(cfg.limit,MAX))this.run=false;
+ }
+ vhAdd(i){if(!this.vcell)return;if(this.S[i]>this.vcell){this.big.push(i);this.la[i]=i;return} // толстые кубы — в отдельный список
+  {const q=this.Q[i];if(q>=0&&this.S[q]<=this.vcell){const a=this.la[q];if(Math.hypot(this.P[i*3]-this.P[a*3],this.P[i*3+1]-this.P[a*3+1],this.P[i*3+2]-this.P[a*3+2])<this.vcell/8){this.la[i]=a;return}}} // мелкие кубы вдоль ветки прореживаем: хэш хранит ~8 точек на ячейку
+  this.la[i]=i;
+  const c=this.vcell,k=((Math.floor(this.P[i*3]/c)+512)*1024+(Math.floor(this.P[i*3+1]/c)+512))*1024+(Math.floor(this.P[i*3+2]/c)+512);let l=this.vh.get(k);if(!l)this.vh.set(k,l=[]);l.push(i)}
+ fam(i,M){const g=++this.gen,mk=this.mark;let cur=[i];mk[i]=g;this.dep[i]=0; // родня по дереву: требуемый зазор растёт с расстоянием по ветке, чтобы развилки расходились, но не слипались
+  for(let d=0;d<M;d++){const nx=[];for(const a of cur){const q=this.Q[a];if(q>=0&&mk[q]!==g){mk[q]=g;this.dep[q]=d+1;nx.push(q)}for(let c=this.fc[a];c>=0;c=this.ns[c])if(mk[c]!==g){mk[c]=g;this.dep[c]=d+1;nx.push(c)}}cur=nx}}
+ space(p,dmin,sNew){ // -1: нельзя (вне области / слишком близко к чужой ветке с учётом толщины); иначе запас свободного места (1..2 долей dmin)
+  if(!inA(p.x,p.y,p.z))return -1;
+  if(cfg.gap>0){const g=cfg.gap*cfg.size;if(!inA(p.x+g,p.y,p.z)||!inA(p.x-g,p.y,p.z)||!inA(p.x,p.y+g,p.z)||!inA(p.x,p.y-g,p.z)||!inA(p.x,p.y,p.z+g)||!inA(p.x,p.y,p.z-g))return -1}
+  const c=this.vcell,sg=cfg.size*.2*SIG,R=Math.max(1,Math.ceil(Math.max(dmin,.55*(sNew+c))/c)),cx=Math.floor(p.x/c),cy=Math.floor(p.y/c),cz=Math.floor(p.z/c);let near=2*dmin;
+  const bad=j=>{const d=Math.hypot(this.P[j*3]-p.x,this.P[j*3+1]-p.y,this.P[j*3+2]-p.z),need=Math.max(dmin,.55*(sNew+this.S[j]));
+   if(this.mark[j]===this.gen)return d<Math.min(need,(this.dep[j]+1)*sg);
+   if(d<need)return true;if(d<near)near=d;return false};
+  for(let a=-R;a<=R;a++)for(let b=-R;b<=R;b++)for(let e=-R;e<=R;e++){const l=this.vh.get(((cx+a+512)*1024+(cy+b+512))*1024+(cz+e+512));if(l)for(const j of l)if(bad(j))return -1}
+  for(const j of this.big)if(bad(j))return -1;
+  return near/dmin}
+ nearCube(x,y,z,rad){ // ближайший куб через хэш (без перебора всех); null — в радиусе rad кубов нет
+  const c=this.vcell,R=Math.max(1,Math.ceil(rad/c)),cx=Math.floor(x/c),cy=Math.floor(y/c),cz=Math.floor(z/c);let m=1e18,mi=-1;
+  const chk=j=>{const dx=this.P[j*3]-x,dy=this.P[j*3+1]-y,dz=this.P[j*3+2]-z,d=dx*dx+dy*dy+dz*dz;if(d<m){m=d;mi=j}};
+  for(let a=-R;a<=R;a++)for(let b=-R;b<=R;b++)for(let e=-R;e<=R;e++){const l=this.vh.get(((cx+a+512)*1024+(cy+b+512))*1024+(cz+e+512));if(l)for(const j of l)chk(j)}
+  for(const j of this.big)chk(j);
+  return mi<0?null:[mi,Math.sqrt(m)]}
+ wallCand(t,k,step,s,pers){ // корень, прижатый к стенке: летит к ближайшей стенке, затем скользит вдоль неё, повторяя её форму
+  const q=nearestCustom(t.p),n=SN.clone(),dist=t.p.distanceTo(q),off=s*.5+cfg.size*.05;let c;
+  if(dist>off+step*2.5){c=q.sub(t.p).normalize().addScaledVector(t.d,pers*.8).addScaledVector(rv(),k*.08).normalize();return{c,p:t.p.clone().addScaledVector(c,step)}}
+  c=t.d.clone().addScaledVector(rv(),cfg.random*(.4+k*.12));c.addScaledVector(n,-c.dot(n)).normalize();
+  const q2=nearestCustom(t.p.clone().addScaledVector(c,step)),p=q2.clone().addScaledVector(SN,off);
+  return{c:p.clone().sub(t.p).normalize(),p}}
+ tickVol(){ // рост внутри объёма: кончик выбирает направление с наибольшим свободным местом; часть корней идёт по стенке
+  const ref=cfg.size,fill=cfg.fill,dmin0=ref*(1.1+(1-fill)*7),dec=cfg.decay,dmax=dmin0*(1+2*dec),K=8,pers=cfg.pers,lim=Math.min(cfg.limit,MAX),bf=cfg.branch*(.6+fill),E=cfg.energy,sg=ref*.2*SIG;
+  if(!ALLOW.g||!ALLOW.cen){this.run=false;return}
+  const cell=Math.max(dmax,ref*.5);
+  if(Math.abs(this.vcell-cell)>1e-9){this.vcell=cell;this.vh.clear();this.big=[];for(let i=0;i<this.n;i++)this.vhAdd(i)}
+  const M=Math.ceil(Math.max(dmax,1.1*Smax())/sg)+1,next=[],hasWall=CUSTOM.tris.length>0;
+  for(const t of this.tips){
+   if(this.n>=lim)break;
+   const prog=Math.min(1,Math.max((1-t.e/E)*3,this.n/lim)),dmin=dmin0*(1+2*dec*prog),s=thick(t.g*(.4+.6*Math.max(t.e-.35,0)/E)),step=Math.min(ref,Math.max(ref*.2,s*.5));
+   let best=null,bs=-1e9;this.fam(t.i,M);
+   for(let k=0;k<K;k++){let c,p;
+    if(t.w&&hasWall){const r=this.wallCand(t,k,step,s,pers);c=r.c;p=r.p}
+    else{c=k===0?t.d.clone().addScaledVector(rv(),cfg.random*1.2):t.d.clone().multiplyScalar(pers*2.5).add(rv());c.normalize();p=t.p.clone().addScaledVector(c,step)}
+    const cl=this.space(p,dmin,s);if(cl<0)continue;
+    const sc=Math.min(cl,2)+pers*1.2*c.dot(t.d)+rnd()*.15;if(sc>bs){bs=sc;best={p,c}}}
+   if(!best)continue; // тупик — кончик погибает
+   t.e-=.35*step/ref;this.add(best.p,s,1-Math.max(0,t.e)/E,t.i);const id=this.n-1;t.i=id;this.vhAdd(id);t.p=best.p;t.d=best.c;if(t.e<=0)continue;next.push(t);
+   if(rnd()<bf&&next.length+this.tips.length<500){const ax=t.d.clone().cross(rv()).normalize(),nd=t.d.clone().applyAxisAngle(ax,cfg.angle*Math.PI/180*(.6+rnd()*.8)),nt=new Tip(t.p.clone(),nd,t.e*.9);nt.i=id;nt.w=rnd()<cfg.wall;nt.g=t.g*genF();next.push(nt)}
+  }
+  if(next.length<4&&this.n<lim){let ok=false; // поиск пустот: целимся в свободную точку и растим к ней от ближайшего куба
+   const A=ALLOW,N=A.nx*A.ny*A.nz,dmR=dmin0*(1+2*dec*Math.min(1,this.n/lim)),sR=thick(.35),stp=Math.min(ref,Math.max(ref*.2,sR*.5)),useW=hasWall&&A.wallIdx&&A.wallIdx.length>0;
+   for(let q=0;q<4&&!ok;q++){const wt=useW&&rnd()<cfg.wall;let tp=null;
+    for(let a=0;a<30&&!tp;a++){let i;if(wt)i=A.wallIdx[Math.floor(rnd()*A.wallIdx.length)];else{i=Math.floor(rnd()*N);if(!A.g[i])continue}
+     const x=A.o.x+(i%A.nx+rnd())*A.h,y=A.o.y+(((i/A.nx)|0)%A.ny+rnd())*A.h,z=A.o.z+(((i/(A.nx*A.ny))|0)+rnd())*A.h;
+     let nc=this.nearCube(x,y,z,2.5*dmR);if(!nc){let m=1e18,mi=-1;for(let j=0;j<this.n;j++){const dx=this.P[j*3]-x,dy=this.P[j*3+1]-y,dz=this.P[j*3+2]-z,d=dx*dx+dy*dy+dz*dz;if(d<m){m=d;mi=j}}nc=[mi,Math.sqrt(m)]}
+     if(nc[1]>dmR*.9)tp=[x,y,z,nc[0]]}
+    if(!tp)break;
+    const r=tp[3],p0=new THREE.Vector3(this.P[r*3],this.P[r*3+1],this.P[r*3+2]),to=new THREE.Vector3(tp[0],tp[1],tp[2]).sub(p0).normalize();this.fam(r,M);
+    for(let k=0;k<K&&!ok;k++){const c=to.clone().addScaledVector(rv(),k*.12).normalize(),p=p0.clone().addScaledVector(c,stp);
+     if(this.space(p,dmR,sR)>=0){const nt=new Tip(p0,c,E*.6);nt.i=r;nt.w=wt;nt.g=.35;next.push(nt);ok=true}}}
+   this.stale=ok?0:this.stale+1;if(this.stale>=20&&!next.length)this.run=false}
+  this.tips=next;if(this.n>=lim)this.run=false}
+ addSeed(pt,nr){ // МИКС: новая точка роста поверх существующей структуры
+  if(this.n>=MAX)return;const m=MODES.indexOf(cfg.mode);let p,d=rv();
+  if(m===6){if(!ALLOW.g)return;p=volSeed(pt,nr)}
+  else if(m>0){p=surf(pt.clone());p.add(SN.clone().multiplyScalar(cfg.size*.5));d.addScaledVector(SN,-d.dot(SN)).normalize()}
+  else{p=pt.clone();d=new THREE.Vector3(0,1,0)}
+  const i=this.n;this.add(p,m===6?thick(1):clampT(cfg.size),0,-1);const t=new Tip(p.clone(),d,cfg.energy);t.i=i;t.w=m===6&&rnd()<cfg.wall;this.tips.push(t);this.vhAdd(i);this.stale=0;this.run=true}
+ tubes(){ // трубки между родителем и потомком
+  const a=new THREE.Vector3(),b=new THREE.Vector3(),o=new THREE.Object3D(),Y=new THREE.Vector3(0,1,0);
+  for(let i=0;i<this.n;i++){const q=this.Q[i];
+   if(q<0){o.scale.set(0,0,0)}
+   else{a.fromArray(this.W,q*3);b.fromArray(this.W,i*3);const dir=b.clone().sub(a),L=dir.length()||1e-4;
+    o.position.copy(a).add(b).multiplyScalar(.5);o.quaternion.setFromUnitVectors(Y,dir.divideScalar(L));
+    const r=(this.Z[q]+this.Z[i])*.2;o.scale.set(r,L,r)}
+   o.updateMatrix();tubeMesh.setMatrixAt(i,o.matrix)}
+  tubeMesh.count=this.n;tubeMesh.instanceMatrix.needsUpdate=true;tubeMesh.instanceColor.needsUpdate=true}
+ update(dt){
+  const was=this.run;if(!cfg.paused&&this.run){this.acc+=dt*cfg.growth;let k=0;const tb=performance.now();while(this.acc>=TICK&&k++<6&&performance.now()-tb<25){this.acc-=TICK;this.tick()}if(this.acc>TICK)this.acc=0} // не более ~25 мс на кадр: интерфейс остаётся отзывчивым
+  if(was&&!this.run)status('Рост завершён: '+this.n+' элементов. Нажмите «Создать меш», чтобы получить единую модель',100,true);
+  this.time+=dt;if(this.n!==this.pn){this.pn=this.n;this.tq=this.time}
+  const mOn=meshObj&&cfg.showMesh,key=cfg.shape+'|'+cfg.wind;if(mOn||(cfg.wind===0&&this.time-this.tq>.8&&key===this.lk))return;this.lk=key;
+  const wv=Environment.windVec(),o=new THREE.Object3D(),dens=cfg.density;
+  for(let i=0;i<this.n;i++){
+   const a=Math.min(1,(this.A[i]+=dt)/.5),e=a*(2-a),u=this.U[i];
+   const amp=cfg.wind*.5*u*u*(1-dens*.5),sw=amp*(1+.5*Math.sin(this.time*1.6+this.P[i*3]*.4+this.P[i*3+2]*.4));
+   o.position.set(this.P[i*3]+wv.x*sw,this.P[i*3+1],this.P[i*3+2]+wv.z*sw);
+   o.rotation.set(this.R[i*3],this.R[i*3+1],this.R[i*3+2]);const z=this.S[i]*e;this.W[i*3]=o.position.x;this.W[i*3+1]=o.position.y;this.W[i*3+2]=o.position.z;this.Z[i]=z;
+   o.scale.setScalar(tubeMesh.visible?z*.8:z);o.updateMatrix();mesh.setMatrixAt(i,o.matrix);
+  }
+  if(tubeMesh.visible)this.tubes();
+  mesh.count=this.n;mesh.instanceMatrix.needsUpdate=true;mesh.instanceColor.needsUpdate=true;
+ }
+}
+
+// ===== Направляющий примитив (wireframe) =====
+function buildGuide(){
+ if(guide){scene.remove(guide);guide.geometry.dispose()}
+ const m=MODES.indexOf(cfg.mode);if(m<1){guide=null;return}
+ const g=[null,new THREE.PlaneGeometry(30,30,30,30),new THREE.SphereGeometry(4,24,16),new THREE.BoxGeometry(6,6,6,6,6,6),new THREE.TorusGeometry(4,1.5,12,36),CUSTOM.geo||new THREE.PlaneGeometry(30,30,30,30).rotateX(Math.PI/2),CUSTOM.geo||new THREE.SphereGeometry(4,24,16)][m];
+ guide=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0x3a5a8a,wireframe:true,transparent:true,opacity:.18,side:THREE.DoubleSide}));
+ if(m===1||m===4)guide.rotation.x=Math.PI/2;guide.visible=cfg.guide;scene.add(guide);
+}
+
+// ===== Единый меш из структуры: поле из шаров и капсул → Surface Nets → сглаживание =====
+// ===== Меш для печати: поле плотности → единая замкнутая поверхность (Surface Nets) =====
+function buildField(fea,s,xs){const{nx,ny,nz}=fea,x=xs||fea.x,X=nx*s+2,Y=ny*s+2,Z=nz*s+2,S=new Float32Array(X*Y*Z),
+  at=(i,j,k)=>x[Math.min(nx-1,Math.max(0,i))+nx*(Math.min(ny-1,Math.max(0,j))+ny*Math.min(nz-1,Math.max(0,k)))];
+ for(let c=0;c<Z-2;c++){const w=(c+.5)/s-.5,k0=Math.floor(w),fz=w-k0;
+  for(let b=0;b<Y-2;b++){const v=(b+.5)/s-.5,j0=Math.floor(v),fy=v-j0;
+   for(let a=0;a<X-2;a++){const u=(a+.5)/s-.5,i0=Math.floor(u),fx=u-i0;let r=0;
+    for(let dz=0;dz<2;dz++)for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++)r+=at(i0+dx,j0+dy,k0+dz)*(dx?fx:1-fx)*(dy?fy:1-fy)*(dz?fz:1-fz);
+    S[(a+1)+X*((b+1)+Y*(c+1))]=r}}}
+ return{S,X,Y,Z}}
+function fixChecker(S0,X,Y,Z,thr){ // убираем «шахматные» грани 2×2: из-за них рёбра меша становятся неманифольдными
+ const S=S0.slice(),e=thr+1e-3;let ch=1;
+ for(let pass=0;pass<8&&ch;pass++){ch=0;
+  for(const[a,b]of[[[1,0,0],[0,1,0]],[[0,1,0],[0,0,1]],[[1,0,0],[0,0,1]]])
+   for(let k=0;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=0;i<X-1;i++){
+    const i1=i+a[0],j1=j+a[1],k1=k+a[2],i2=i+b[0],j2=j+b[1],k2=k+b[2],i3=i1+b[0],j3=j1+b[1],k3=k1+b[2];if(i3>=X||j3>=Y||k3>=Z)continue;
+    const p=i+X*(j+Y*k),q=i1+X*(j1+Y*k1),r=i2+X*(j2+Y*k2),t=i3+X*(j3+Y*k3),A=S[p]>thr,B=S[q]>thr,C=S[r]>thr,D=S[t]>thr;
+    if(A&&D&&!B&&!C){S[S[q]>=S[r]?q:r]=e;ch++}else if(B&&C&&!A&&!D){S[S[p]>=S[t]?p:t]=e;ch++}}}
+ return S}
+function surfaceNets(S,X,Y,Z,thr,hs,ox,oy,oz){S=fixChecker(S,X,Y,Z,thr);const cid=new Int32Array((X-1)*(Y-1)*(Z-1)).fill(-1),V=[],I=[],
+  E=[[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]],val=new Float32Array(8);
+ for(let k=0;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=0;i<X-1;i++){let m=0;
+  for(let c=0;c<8;c++){val[c]=S[(i+(c&1))+X*((j+((c>>1)&1))+Y*(k+(c>>2)))];if(val[c]>thr)m|=1<<c}
+  if(m===0||m===255)continue;let cx=0,cy=0,cz=0,n=0;
+  for(const[a,b]of E){const va=val[a],vb=val[b];if((va>thr)!==(vb>thr)){const t=(thr-va)/(vb-va),ax=a&1,ay=(a>>1)&1,az=a>>2;
+   cx+=ax+t*((b&1)-ax);cy+=ay+t*(((b>>1)&1)-ay);cz+=az+t*((b>>2)-az);n++}}
+  cid[i+(X-1)*(j+(Y-1)*k)]=V.length/3;V.push(ox+(i-1+.5+cx/n)*hs,oy+(j-1+.5+cy/n)*hs,oz+(k-1+.5+cz/n)*hs)}
+ const C=(i,j,k)=>cid[i+(X-1)*(j+(Y-1)*k)],q=(a,b,c,d,fl)=>{if(a<0||b<0||c<0||d<0)return;if(fl)I.push(a,c,b,a,d,c);else I.push(a,b,c,a,c,d)},P=(i,j,k)=>S[i+X*(j+Y*k)];
+ for(let k=1;k<Z-1;k++)for(let j=1;j<Y-1;j++)for(let i=0;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i+1,j,k)>thr;if(a!==b)q(C(i,j-1,k-1),C(i,j,k-1),C(i,j,k),C(i,j-1,k),!a)}
+ for(let k=1;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=1;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i,j+1,k)>thr;if(a!==b)q(C(i-1,j,k-1),C(i-1,j,k),C(i,j,k),C(i,j,k-1),!a)}
+ for(let k=0;k<Z-1;k++)for(let j=1;j<Y-1;j++)for(let i=1;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i,j,k+1)>thr;if(a!==b)q(C(i-1,j-1,k),C(i,j-1,k),C(i,j,k),C(i-1,j,k),!a)}
+ return{V:Float32Array.from(V),I:Uint32Array.from(I)}}
+function keepLargest(V,I){const nv=V.length/3,par=new Int32Array(nv).map((_,i)=>i),f=a=>{while(par[a]!==a){par[a]=par[par[a]];a=par[a]}return a};
+ for(let t=0;t<I.length;t+=3){par[f(I[t])]=f(I[t+1]);par[f(I[t+1])]=f(I[t+2])}
+ const cnt=new Map();for(let t=0;t<I.length;t+=3){const r=f(I[t]);cnt.set(r,(cnt.get(r)||0)+1)}
+ let bc=0;for(const[,c]of cnt)bc=Math.max(bc,c);const keep=new Set();for(const[r,c]of cnt)if(c>=.05*bc)keep.add(r); // убираем только мелкие плавающие обломки
+ const map=new Int32Array(nv).fill(-1),nV=[],nI=[];
+ for(let t=0;t<I.length;t+=3){if(!keep.has(f(I[t])))continue;for(let q=0;q<3;q++){const v=I[t+q];if(map[v]<0){map[v]=nV.length/3;nV.push(V[3*v],V[3*v+1],V[3*v+2])}nI.push(map[v])}}
+ return{V:Float32Array.from(nV),I:Uint32Array.from(nI),removed:cnt.size-keep.size,parts:keep.size}}
+function taubin(V,I,n){if(!n)return;const nv=V.length/3,es=new Set();
+ for(let t=0;t<I.length;t+=3)for(let q=0;q<3;q++){const a=I[t+q],b=I[t+(q+1)%3];es.add(a<b?a*nv+b:b*nv+a)}
+ const deg=new Int32Array(nv+1);for(const e of es){deg[(e/nv|0)+1]++;deg[e%nv+1]++}for(let i=0;i<nv;i++)deg[i+1]+=deg[i];
+ const pos=deg.slice(0,nv),nb=new Int32Array(deg[nv]);for(const e of es){const a=e/nv|0,b=e%nv;nb[pos[a]++]=b;nb[pos[b]++]=a}
+ const T=new Float32Array(V.length),pass=l=>{for(let v=0;v<nv;v++){const s=deg[v],e=deg[v+1];if(e===s){T[3*v]=V[3*v];T[3*v+1]=V[3*v+1];T[3*v+2]=V[3*v+2];continue}
+   let x=0,y=0,z=0;for(let q=s;q<e;q++){x+=V[3*nb[q]];y+=V[3*nb[q]+1];z+=V[3*nb[q]+2]}const c=e-s;
+   T[3*v]=V[3*v]+l*(x/c-V[3*v]);T[3*v+1]=V[3*v+1]+l*(y/c-V[3*v+1]);T[3*v+2]=V[3*v+2]+l*(z/c-V[3*v+2])}V.set(T)};
+ for(let it=0;it<n;it++){pass(.5);pass(-.53)}}
+function meshVol(V,I){let v=0;for(let t=0;t<I.length;t+=3){const a=I[t],b=I[t+1],c=I[t+2];
+  v+=(V[3*a]*(V[3*b+1]*V[3*c+2]-V[3*b+2]*V[3*c+1])-V[3*a+1]*(V[3*b]*V[3*c+2]-V[3*b+2]*V[3*c])+V[3*a+2]*(V[3*b]*V[3*c+1]-V[3*b+1]*V[3*c]))/6}return v}
+function analyzeMesh(V,I){let vol=0;const nv=V.length/3,dir=new Map();
+ for(let t=0;t<I.length;t+=3){const a=I[t],b=I[t+1],c=I[t+2];
+  vol+=(V[3*a]*(V[3*b+1]*V[3*c+2]-V[3*b+2]*V[3*c+1])-V[3*a+1]*(V[3*b]*V[3*c+2]-V[3*b+2]*V[3*c])+V[3*a+2]*(V[3*b]*V[3*c+1]-V[3*b+1]*V[3*c]))/6;
+  for(let q=0;q<3;q++){const k=I[t+q]*nv+I[t+(q+1)%3];dir.set(k,(dir.get(k)||0)+1)}}
+ let bad=0;for(const[k,c]of dir){const a=k/nv|0,b=k%nv;if(c!==1||dir.get(b*nv+a)!==1)bad++}
+ return{vol,bad,tris:I.length/3}}
+
+// Продлеваем плотность за границу области на 2 слоя (потом обрезаем точной формой модели)
+
+function blur3(A,nx,ny,nz){const B=new Float32Array(A.length);
+ for(let ax=0;ax<3;ax++){const st=[1,nx,nx*ny][ax],n=[nx,ny,nz][ax];
+  for(let i=0;i<A.length;i++){const c=[i%nx,((i/nx)|0)%ny,(i/(nx*ny))|0][ax];B[i]=(A[c>0?i-st:i]+A[i]+A[c<n-1?i+st:i])/3}A.set(B)}}
+let meshObj=null,MESHR=null,meshInfo='';
+function clearMeshObj(){if(meshObj){scene.remove(meshObj);meshObj.geometry.dispose();meshObj=null}MESHR=null;meshInfo='';mesh.visible=true;tubeMesh.visible=cfg.shape==='Трубки'}
+function setMeshVisible(){if(!meshObj)return;meshObj.visible=cfg.showMesh;mesh.visible=!cfg.showMesh;tubeMesh.visible=!cfg.showMesh&&cfg.shape==='Трубки'}
+function meshBox(V){const mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];for(let i=0;i<V.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[i+d]);mx[d]=Math.max(mx[d],V[i+d])}return{mn,mx,x:mx[0]-mn[0],y:mx[1]-mn[1],z:mx[2]-mn[2]}}
+async function createMesh(){
+ if(busy)return;if(org.n<3)return status('Сначала вырастите структуру: нажмите «Старт»',100,true);busy=true;
+ try{status('Меш: подготовка сетки…',5);await tk();
+  const n=org.n,P=org.P,S=org.S,Q=org.Q,T=cfg.mthick,mmU=cfg.modelMM/10,mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
+  for(let i=0;i<n;i++){const r=S[i]*.5*T+.02;for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],P[i*3+d]-r);mx[d]=Math.max(mx[d],P[i*3+d]+r)}}
+  const want=Math.max((cfg.mmesh>0?cfg.mmesh:cfg.modelMM/200)*Umm(),1e-4);let hs=want,X,Y,Z;
+  for(;;){X=Math.ceil((mx[0]-mn[0])/hs)+6;Y=Math.ceil((mx[1]-mn[1])/hs)+6;Z=Math.ceil((mx[2]-mn[2])/hs)+6;if(X*Y*Z<=7e6)break;hs*=1.08}
+  const limited=hs>want*1.02,ox=mn[0]-3*hs,oy=mn[1]-3*hs,oz=mn[2]-3*hs,F=new Float32Array(X*Y*Z),own=new Uint16Array(X*Y*Z).fill(65535);
+  const stamp=(x,y,z,r,id)=>{const R=r+hs,R2=R*R,i0=Math.max(0,Math.floor((x-R-ox)/hs)),i1=Math.min(X-1,Math.ceil((x+R-ox)/hs)),j0=Math.max(0,Math.floor((y-R-oy)/hs)),j1=Math.min(Y-1,Math.ceil((y+R-oy)/hs)),k0=Math.max(0,Math.floor((z-R-oz)/hs)),k1=Math.min(Z-1,Math.ceil((z+R-oz)/hs));
+   for(let k=k0;k<=k1;k++){const dz=oz+k*hs-z;for(let j=j0;j<=j1;j++){const dy=oy+j*hs-y,b=dy*dy+dz*dz;if(b>R2)continue;
+    for(let i=i0;i<=i1;i++){const dx=ox+i*hs-x,d2=dx*dx+b;if(d2>R2)continue;let v=.5+(r-Math.sqrt(d2))/hs;if(v<=0)continue;if(v>1)v=1;const q=i+X*(j+Y*k);if(v>F[q]){F[q]=v;own[q]=id}}}}};
+  const rad=i=>Math.max(S[i]*.5*T,.75*hs);
+  for(let i=0;i<n;i++){const ri=rad(i);stamp(P[i*3],P[i*3+1],P[i*3+2],ri,i);const q=Q[i];
+   if(q>=0){const ax=P[q*3],ay=P[q*3+1],az=P[q*3+2],bx=P[i*3],by=P[i*3+1],bz=P[i*3+2],L=Math.hypot(bx-ax,by-ay,bz-az),ra=rad(q),sp=Math.max(.5*hs,.3*Math.min(ra,ri)),st=Math.ceil(L/sp);
+    for(let t=1;t<st;t++){const u=t/st;stamp(ax+(bx-ax)*u,ay+(by-ay)*u,az+(bz-az)*u,ra+(ri-ra)*u,i)}}
+   if(i%300===0){status('Меш: заполнение поля…',5+Math.round(i/n*45));await tk()}}
+  status('Меш: построение поверхности…',60);await tk();
+  let m=surfaceNets(F,X,Y,Z,.5,hs,ox+.5*hs,oy+.5*hs,oz+.5*hs);if(!m.I.length)throw new Error('поверхность пуста');
+  const kl=keepLargest(m.V,m.I);m={V:kl.V,I:kl.I};status('Меш: сглаживание поверхности…',75);await tk();taubin(m.V,m.I,cfg.msm);
+  const a=analyzeMesh(m.V,m.I);if(a.vol<0){for(let t=0;t<m.I.length;t+=3){const q=m.I[t+1];m.I[t+1]=m.I[t+2];m.I[t+2]=q}a.vol=-a.vol}
+  const col=new Float32Array(m.V.length),c=new THREE.Color(),tn=Environment.tn();
+  for(let v=0;v<m.V.length/3;v++){let id=65535;const i0=Math.round((m.V[3*v]-ox)/hs),j0=Math.round((m.V[3*v+1]-oy)/hs),k0=Math.round((m.V[3*v+2]-oz)/hs);
+   for(let r=0;r<3&&id===65535;r++)for(let dk=-r;dk<=r&&id===65535;dk++)for(let dj=-r;dj<=r&&id===65535;dj++)for(let di=-r;di<=r&&id===65535;di++){const i=i0+di,j=j0+dj,k=k0+dk;if(i>=0&&j>=0&&k>=0&&i<X&&j<Y&&k<Z)id=own[i+X*(j+Y*k)]}
+   if(id===65535)id=0;c.setHSL(.62-.58*tn+(org.J[id]-.5)*.08,.65,.2+.5*org.U[id]);col[3*v]=c.r;col[3*v+1]=c.g;col[3*v+2]=c.b}
+  clearMeshObj();const g2=new THREE.BufferGeometry();g2.setAttribute('position',new THREE.BufferAttribute(m.V,3));g2.setAttribute('color',new THREE.BufferAttribute(col,3));g2.setIndex(new THREE.BufferAttribute(m.I,1));g2.computeVertexNormals();
+  meshObj=new THREE.Mesh(g2,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.5,metalness:.1}));meshObj.castShadow=meshObj.receiveShadow=true;scene.add(meshObj);
+  MESHR={V:m.V,I:m.I,vol:a.vol,bad:a.bad,tris:a.tris,parts:kl.parts};cfg.showMesh=true;setMeshVisible();if(typeof ui!=='undefined')ui.upd();
+  const bb=meshBox(m.V),red='color:#ff6b6b',okc='color:#5fe08a';
+  meshInfo='<br><b>Меш:</b> '+a.tris+' треуг. · '+(bb.x*mmU).toFixed(0)+'×'+(bb.z*mmU).toFixed(0)+'×'+(bb.y*mmU).toFixed(0)+' мм · объём '+(a.vol*mmU**3/1000).toFixed(1)+' см³<br>'+(a.bad?'<span style="'+red+'">открытых рёбер: '+a.bad+'</span>':'<span style="'+okc+'">замкнутый, пригоден для печати ✓</span>')+(kl.parts>1?'<br><span style="'+red+'">несвязных частей: '+kl.parts+'</span>':'')+
+   '<br>Сетка меша: '+(hs*mmU).toFixed(2)+' мм'+(limited?'<br><span style="'+red+'">тонкие корни в меше утолщены до ~'+(1.5*hs*mmU).toFixed(1)+' мм (ограничение памяти): уменьшите «Размер модели» или поднимите «Мин. толщину»</span>':'');
+  status('Меш готов: '+a.tris+' треугольников',100,true)
+ }catch(e){status('Ошибка меша: '+e.message,100,true);console.error(e)}finally{busy=false}}
+function printMesh(){ // Y-вверх → Z-вверх, центр по XY, низ на z=0, масштаб в мм
+ const V=MESHR.V,b=meshBox(V),k=cfg.modelMM/10,o=new Float32Array(V.length),cx=(b.mn[0]+b.mx[0])/2,cz=(b.mn[2]+b.mx[2])/2;
+ for(let i=0;i<V.length;i+=3){o[i]=(V[i]-cx)*k;o[i+1]=-(V[i+2]-cz)*k;o[i+2]=(V[i+1]-b.mn[1])*k}return o}
+async function exportMeshSTL(){if(!MESHR)return status('Сначала нажмите «Создать меш»',100,true);if(busy)return;busy=true;
+ try{const V=printMesh(),I=MESHR.I,nt=I.length/3,buf=new ArrayBuffer(84+nt*50),dv=new DataView(buf);status('Подготовка STL…',50);await tk();dv.setUint32(80,nt,true);
+  for(let t=0;t<nt;t++){const a=I[3*t],b=I[3*t+1],c=I[3*t+2],o=84+t*50,ux=V[3*b]-V[3*a],uy=V[3*b+1]-V[3*a+1],uz=V[3*b+2]-V[3*a+2],vx=V[3*c]-V[3*a],vy=V[3*c+1]-V[3*a+1],vz=V[3*c+2]-V[3*a+2];
+   let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;const l=Math.hypot(nx,ny,nz)||1;[nx/l,ny/l,nz/l].forEach((q,i)=>dv.setFloat32(o+4*i,q,true));
+   [a,b,c].forEach((v,k)=>{for(let d=0;d<3;d++)dv.setFloat32(o+12+12*k+4*d,V[3*v+d],true)})}
+  await saveFile('organik.stl.txt',new Blob([buf]))}finally{busy=false}}
+async function exportMeshOBJ(){if(!MESHR)return status('Сначала нажмите «Создать меш»',100,true);if(busy)return;busy=true;
+ try{const V=printMesh(),I=MESHR.I,out=['# Organik mesh (mm, Z-up)','o organik'];status('Подготовка OBJ…',50);await tk();
+  for(let i=0;i<V.length;i+=3)out.push('v '+V[i].toFixed(3)+' '+V[i+1].toFixed(3)+' '+V[i+2].toFixed(3));
+  for(let i=0;i<I.length;i+=3)out.push('f '+(I[i]+1)+' '+(I[i+1]+1)+' '+(I[i+2]+1));await saveFile('organik.obj.txt',new Blob([out.join('\n')]))}finally{busy=false}}
+
+// ===== Интерфейс: слева — модель, точки и запуск; справа — регулировки =====
+function startAction(){
+ if(cfg.mix&&org.n>0){if(!MIXPTS.length){status('МИКС: сначала кликните по детали — поставьте точки новой структуры',100,true);return}
+  for(const q of MIXPTS)org.addSeed(q.p,q.n);MIXPTS=[];refreshMix();org.run=true;return}
+ if(cfg.area.startsWith('Модель')&&!CUSTOM.tris.length){status('Сначала загрузите модель (.obj/.glb)',100,true);return}
+ if(cfg.rndSeed)cfg.seed=Math.floor(Math.random()*99999);ui.upd();org.reset();org.run=true}
+function askReset(){document.getElementById('modal').style.display='flex'}
+function closeModal(){document.getElementById('modal').style.display='none'}
+function doReset(){closeModal();Object.assign(cfg,DEFAULT);picking=null;SEEDPT=null;SEEDN=null;MIXPTS=[];refreshMix();
+ CUSTOM.geo=null;CUSTOM.tris=[];CUSTOM.grid.clear();Object.assign(ALLOW,{g:null,ins:null,srf:null,hit:null,cav:null,cen:null,cavCen:null,wallIdx:null,cnt:0,cavCnt:0,note:''});
+ setPickNames();ui.sync();ui.upd();org.reset();camera.position.set(14,10,14);controls.target.set(0,2,0);status('Сброшено до стартовой страницы',100,true)}
+class UI{
+ constructor(org){
+  const gl=this.gl=new lil.GUI({title:'Модель и запуск',container:document.getElementById('lp')}),g=this.g=new lil.GUI({title:'Регулировки'}),ta=document.getElementById('ta'),rs=()=>org.reset();
+  this.upd=()=>{gl.controllersRecursive().forEach(c=>c.updateDisplay());g.controllersRecursive().forEach(c=>c.updateDisplay())};
+  const act={
+   rand:()=>{Object.assign(cfg,{branch:Math.random()*.4,angle:20+Math.random()*70,random:Math.random()*.6,density:Math.random(),temp:-20+Math.random()*60,wind:Math.random()*.7,taper:Math.random()});this.sync();org.recolor()},
+   exp:()=>{ta.style.display='block';ta.value=JSON.stringify(cfg)},
+   imp:()=>{try{Object.assign(cfg,JSON.parse(ta.value));syncArea();this.sync();org.reset()}catch(e){ta.value='Ошибка JSON'}}
+  };
+  const pr={'Пресет':'—'},fi=document.getElementById('f');fi.onchange=e=>{if(e.target.files[0])loadModel(e.target.files[0]);fi.value=''};
+  // ЛЕВАЯ ПАНЕЛЬ
+  const src=gl.addFolder('Источник и область');
+  src.add({m:()=>fi.click()},'m').name('Загрузить модель (.obj/.glb)');
+  src.add(cfg,'area',AREAS).name('Режим роста').onChange(()=>{applyArea();SEEDPT=null;rs()});
+  src.add(cfg,'openSides',0,2,1).name('Допустимо открытых сторон (сосуд)').onChange(()=>{applyAllow();SEEDPT=null;rs()});
+  src.add(cfg,'guide').name('Показать направляющую').onChange(v=>{if(guide)guide.visible=v});
+  const pts=gl.addFolder('Точки роста');
+  pickCtl=pts.add({p:togglePick},'p').name('Задать точку роста');
+  pts.add({c:clearPick},'c').name('Сбросить точку роста');
+  mixCtl=pts.add({m:toggleMix},'m').name('МИКС: добавить структуру');
+  const look=gl.addFolder('Вид и пресеты');
+  look.add(cfg,'shape',SHAPES).name('Форма элемента').onChange(applyShape);
+  look.add(pr,'Пресет',['—',...Object.keys(PRESETS)]).onChange(v=>{const p=PRESETS[v];if(!p)return;const k={...p};
+   if(cfg.area.startsWith('Модель')&&k.mode!=='Объём модели')delete k.mode; // загруженная модель не сбрасывается пресетами
+   if(k.mode&&k.mode!==cfg.mode)SEEDPT=null;Object.assign(cfg,k);syncArea();if(cfg.area.startsWith('Модель'))applyAllow();this.sync();org.reset()});
+  const mf=gl.addFolder('Меш и экспорт');
+  mf.add({a:createMesh},'a').name('Создать меш');
+  mf.add(cfg,'showMesh').name('Показывать меш вместо кубов').onChange(()=>{setMeshVisible();applyShape()});
+  mf.add({a:exportMeshSTL},'a').name('Скачать меш (STL)');mf.add({a:exportMeshOBJ},'a').name('Скачать меш (OBJ)');
+  mf.add({a:exportOBJ},'a').name('Скачать кубы (OBJ)');mf.add({a:savePNG},'a').name('Сохранить PNG (2×)');
+  gl.add({a:askReset},'a').name('Сбросить всё…');
+  const sb=gl.add({a:startAction},'a').name('▶ СТАРТ');startBtn=sb.$button||sb.domElement.querySelector('button');startBtn.classList.add('startbtn');sb.domElement.classList.add('startc');
+  // ПРАВАЯ ПАНЕЛЬ
+  const th=g.addFolder('Размер и толщина');
+  th.add(cfg,'modelMM',20,1000,1).name('Размер модели, мм');
+  th.add(cfg,'tmin',.1,10,.05).name('Мин. толщина корня, мм');th.add(cfg,'tmax',1,20,.1).name('Макс. толщина корня, мм');
+  th.add(cfg,'taper',0,1.5,.01).name('Сужение (толстые → тонкие)');th.add(cfg,'size',.05,1.5,.01).name('Масштаб ячейки / расстояний');
+  const vf=g.addFolder('Заполнение (корни в объёме)');
+  vf.add(cfg,'fill',0,1,.01).name('Плотность заполнения');vf.add(cfg,'decay',0,1,.01).name('Затухание плотности');
+  vf.add(cfg,'wall',0,1,.01).name('По форме (корни вдоль стенки)');vf.add(cfg,'pers',0,1,.01).name('Прямолинейность');vf.add(cfg,'gap',0,4,.1).name('Отступ от стенок');
+  const f=g.addFolder('Рост');
+  f.add(cfg,'paused').name('Пауза');f.add(cfg,'growth',0,5,.05).name('Скорость роста ×');
+  f.add(cfg,'branch',0,.6,.01).name('Ветвление');f.add(cfg,'angle',5,120,1).name('Угол ветвления');
+  f.add(cfg,'random',0,1,.01).name('Случайность');f.add(cfg,'energy',10,200,1).name('Энергия/глубина');
+  f.add(cfg,'avoid',0,1,.01).name('Самоизбегание');f.add(cfg,'limit',500,MAX,100).name('Лимит кубов');
+  f.add(cfg,'seed',1,99999,1).name('Seed').onFinishChange(rs);f.add(cfg,'rndSeed').name('Случайный seed при старте');
+  const e=g.addFolder('Среда');
+  e.add(cfg,'wind',0,1,.01).name('Ветер: сила');e.add(cfg,'windDir',0,360,1).name('Ветер: угол °');
+  e.add(cfg,'density',0,1,.01).name('Плотность среды');
+  e.add(cfg,'temp',-20,40,1).name('Температура').onChange(()=>org.recolor());
+  e.add(cfg,'light',0,1.5,.01).name('Освещённость').onChange(Environment.apply);
+  e.add(cfg,'lightAz',0,360,1).name('Свет: азимут').onChange(Environment.apply);
+  e.add(cfg,'lightElev',5,90,1).name('Свет: высота').onChange(Environment.apply);
+  const mp=g.addFolder('Меш: параметры');
+  mp.add(cfg,'mmesh',0,3,.05).name('Разрешение, мм (0 = авто)');mp.add(cfg,'mthick',.5,1.6,.01).name('Толщина ветвей ×');mp.add(cfg,'msm',0,20,1).name('Сглаживание');
+  const t=g.addFolder('Прочее');t.add(act,'rand').name('Случайные параметры');t.add(act,'exp').name('Экспорт JSON');t.add(act,'imp').name('Применить JSON');
+  e.close();mp.close();t.close();f.close();
+  if(innerWidth<700){gl.close();g.close()}
+ }
+ sync(){applyShape();this.upd();Environment.apply()}
+}
+
+// ===== Запуск =====
+const org=new Organism(),ui=new UI(org);Environment.apply();
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+const hud=document.getElementById('hud');let last=performance.now(),fr=0,ft=0;
+(function loop(now){
+ requestAnimationFrame(loop);const dt=Math.min(.1,(now-last)/1000);last=now;
+ org.update(dt);if(startBtn)startBtn.classList.toggle('run',org.run&&!cfg.paused);controls.update();renderer.render(scene,camera);
+ fr++;ft+=dt;if(ft>.5){hud.innerHTML='Кубов: '+org.n+' · Активных кончиков: '+org.tips.length+'<br>FPS: '+Math.round(fr/ft)+(org.run?'':'<br>Нажмите «Старт» (левая панель, внизу)')+meshInfo;fr=0;ft=0}
+})(performance.now());
+</script>
+</body>
+</html>
