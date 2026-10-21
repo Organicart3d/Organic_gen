@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Мастерская моделей</title>
+<style>
+:root{
+  --bg:#0e0f12;--surface:#16181d;--surface2:#1d2027;--line:#2a2e37;
+  --text:#eceef2;--muted:#8d94a3;--accent:#7cf0c0;--accent2:#6aa8ff;--on-accent:#06130e;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f6f8;--surface:#fff;--surface2:#eef0f4;--line:#dfe2e8;
+    --text:#14161a;--muted:#667085;--accent:#0f9d6b;--accent2:#2f6fe0;--on-accent:#fff;color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f5f6f8;--surface:#fff;--surface2:#eef0f4;--line:#dfe2e8;
+  --text:#14161a;--muted:#667085;--accent:#0f9d6b;--accent2:#2f6fe0;--on-accent:#fff;color-scheme:light;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  background-image:radial-gradient(60rem 30rem at 80% -10%,color-mix(in srgb,var(--accent) 10%,transparent),transparent 60%)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.2px}
+.logo i{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.actions{display:flex;gap:8px}
+button,.btn{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--text);padding:8px 14px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:.15s}
+button:hover:not(:disabled),.btn:hover{border-color:var(--accent)}
+button:disabled{opacity:.55;cursor:default}
+.hero{padding:48px 0 28px}
+.hero h1{font-size:clamp(30px,6vw,52px);line-height:1.1;margin:0 0 14px;letter-spacing:-.02em}
+.hero p{color:var(--muted);max-width:560px;margin:0;font-size:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px;padding:20px 0 40px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;overflow:hidden;display:flex;flex-direction:column;transition:.2s}
+.card:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 60%,var(--line))}
+.thumb{height:150px;background:var(--surface2);display:grid;place-items:center}
+.thumb svg{width:100%;height:100%}
+.body{padding:16px 16px 18px;display:flex;flex-direction:column;gap:8px;flex:1}
+.body h3{margin:0;font-size:18px}
+.body p{margin:0;color:var(--muted);font-size:14px;flex:1}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tag{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.open{margin-top:6px;justify-content:center;background:var(--accent);color:var(--on-accent);border-color:transparent;font-weight:600}
+.open[aria-disabled="true"]{background:var(--surface2);color:var(--muted);pointer-events:none}
+.soon{margin:0 0 56px;padding:20px;border:1px dashed var(--line);border-radius:18px;color:var(--muted);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+footer{border-top:1px solid var(--line);padding:20px 0 32px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><i></i>Мастерская</div>
+    <div class="actions">
+      <button id="theme" aria-label="Сменить тему">◐</button>
+      <button disabled title="Скоро">Войти</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <h1>Органическое моделирование</h1>
+    <p>Генераторы и инструменты для концептов, форм и 3D-печати. Выбери модель и открой её.</p>
+  </section>
+
+  <main class="grid" id="grid"></main>
+
+  <div class="soon">
+    <span>Скоро: регистрация и сохранение проектов.</span>
+    <button disabled>Мои проекты</button>
+  </div>
+
+  <footer>© Ринат · Pavlodar</footer>
+</div>
+
+<script>
+/* Чтобы добавить модель — вставь объект в этот список.
+   url: ссылка на опубликованную страницу модели (пока пусто = «Скоро»). */
+var MODELS = [
+  {id:"organik", title:"Органик", desc:"3D-симулятор роста живой структуры из кубов: ветер, плотность среды, заполнение объёма внутри загруженной модели.", tags:["3D","Рост","OBJ"], url:"", art:"cubes"},
+  {id:"organik2", title:"Дерево", desc:"Рост ветвей полигональной сеткой: от толстого основания к тонкому кончику. Пресеты: дерево, куст, мох, лиана, корни, плесень.", tags:["3D","Пресеты","OBJ / STL"], url:"tree.html", art:"branch"},
+  {id:"load", title:"Несущие формы", desc:"Лёгкая органическая форма для деталей под нагрузкой: рукоятка, кронштейн. Расчёт нагрузки и выбор материала.", tags:["3D-печать","Нагрузка"], url:"", art:"truss"},
+  {id:"hair", title:"Волосы и рисунок головы", desc:"Рисунок головы с волосами. Позже здесь появится генератор волос.", tags:["2D","Рисунок","Скоро генератор"], url:"", art:"cut"}
+];
+
+var ART = {
+  cubes:'<g fill="none" stroke="var(--accent)" stroke-width="2"><path d="M120 95l22-12 22 12v24l-22 12-22-12z"/><path d="M142 83v24M120 95l22 12 22-12"/><path d="M150 60l16-9 16 9v18l-16 9-16-9z" stroke="var(--accent2)"/><path d="M95 118l14-8 14 8v16l-14 8-14-8z" stroke="var(--accent2)"/></g>',
+  branch:'<g fill="none" stroke="var(--accent)" stroke-linecap="round"><path d="M160 150V95" stroke-width="12"/><path d="M160 95Q158 70 130 50" stroke-width="7"/><path d="M160 95Q166 68 195 45" stroke-width="7"/><path d="M130 50l-14-14M130 50l10-18M195 45l12-14M195 45l-14-12" stroke-width="3" stroke="var(--accent2)"/></g>',
+  truss:'<g fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"><path d="M70 110h180M70 60h180M70 60l45 50 45-50 45 50 45-50M70 60v50M250 60v50"/></g><g fill="var(--accent2)"><circle cx="70" cy="60" r="5"/><circle cx="250" cy="60" r="5"/></g>',
+  cut:'<g fill="none" stroke="var(--accent)" stroke-width="2.5"><circle cx="160" cy="55" r="16"/><path d="M160 71v42M160 85l-28 20M160 85l28 20M160 113l-18 32M160 113l18 32" stroke-dasharray="6 5"/></g><path d="M105 40l14 14M215 40l-14 14" stroke="var(--accent2)" stroke-width="3" stroke-linecap="round"/>'
+};
+
+var grid = document.getElementById("grid");
+MODELS.forEach(function(m){
+  var ready = !!m.url;
+  var card = document.createElement("article");
+  card.className = "card";
+  card.innerHTML =
+    '<div class="thumb"><svg viewBox="0 0 320 150" role="img" aria-label="'+m.title+'">'+(ART[m.art]||"")+'</svg></div>'+
+    '<div class="body"><h3>'+m.title+'</h3><p>'+m.desc+'</p>'+
+    '<div class="tags">'+m.tags.map(function(t){return '<span class="tag">'+t+'</span>';}).join("")+'</div>'+
+    '<a class="btn open" '+(ready?'href="'+m.url+'" target="_blank" rel="noopener"':'aria-disabled="true"')+'>'+(ready?'Открыть':'Скоро')+'</a></div>';
+  grid.appendChild(card);
+});
+
+var root = document.documentElement;
+try{ var saved = localStorage.getItem("theme"); if(saved) root.setAttribute("data-theme", saved); }catch(e){}
+document.getElementById("theme").onclick = function(){
+  var cur = root.getAttribute("data-theme") ||
+    (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  var next = cur === "dark" ? "light" : "dark";
+  root.setAttribute("data-theme", next);
+  try{ localStorage.setItem("theme", next); }catch(e){}
+};
+</script>
+</body>
+</html>

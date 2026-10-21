@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Дерево</title>
+<style>
+html,body{margin:0;height:100%;background:#05060a;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+canvas#c{display:block}
+#lp{position:fixed;left:12px;top:calc(10px + env(safe-area-inset-top,0px));width:272px;background:#0b0e14d9;border:1px solid #1d2a40;border-radius:10px;padding:10px 12px 12px;box-sizing:border-box}
+#plabel{color:#e6f0ff;font-size:18px;font-weight:700;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#prof{display:block;width:100%;height:auto;background:#070a10;border:1px solid #1d2a40;border-radius:8px}
+#plab{color:#6f8299;font-size:11px;text-align:center;margin:4px 0 8px}
+#tr{display:flex;gap:8px;justify-content:center;margin-bottom:8px}
+#tr button{width:64px;height:40px;border-radius:8px;border:1px solid #2b4a7a;background:#101a2c;color:#cfe0ff;font-size:20px;cursor:pointer;line-height:1}
+#tr button:hover{background:#1b2a47}#tr button.pl{background:#1b66f0;border-color:#6fb0ff;color:#fff}
+#prog{width:100%;margin:0;accent-color:#3a8bff}
+#progv{color:#8fa3b8;font-size:11px;text-align:right;margin-top:2px}
+#rbox{margin-top:10px}#rprof{display:block;width:100%;height:auto;background:#070a10;border:1px solid #1d2a40;border-radius:8px}#plab2{color:#c9b84a;font-size:11px;text-align:center;margin-bottom:4px}
+#mypresets{position:fixed;left:300px;right:300px;top:calc(10px + env(safe-area-inset-top,0px));display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+#mypresets button{padding:7px 13px;border-radius:8px;border:1px solid #2b4a7a;background:#0f1726;color:#bcd0ee;font-size:13px;cursor:pointer}
+#mypresets button.sv{border-style:dashed}
+#mypresets button:hover{background:#1a2740}
+#mypresets button.on{background:#1b66f0;color:#fff;border-color:#6fb0ff;box-shadow:0 0 12px 2px rgba(50,130,255,.5)}
+#mypresets .x{margin-left:8px;opacity:.6}#mypresets .x:hover{opacity:1;color:#ff8a8a}
+#hud{position:fixed;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));color:#8fa3b8;font-size:12px;pointer-events:none;line-height:1.5;max-width:300px}
+#st{position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:none;min-width:240px;max-width:90vw;background:#0b0e14ee;border:1px solid #2b4a7a;border-radius:8px;padding:8px 12px;color:#cfe0ff;font-size:13px;z-index:9}
+#stb{height:5px;background:#1a2438;border-radius:3px;margin-top:6px;overflow:hidden}
+#stf{display:block;height:100%;width:0;background:#3a8bff;transition:width .15s}
+#stf.ind{width:40%!important;animation:ind 1s linear infinite}@keyframes ind{from{margin-left:-40%}to{margin-left:100%}}
+#modal{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;z-index:50}
+#modal>div{background:#0f1420;border:1px solid #2b4a7a;border-radius:10px;padding:18px 22px;color:#cfe0ff;width:300px;font-size:14px;line-height:1.6}
+#modal input{width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid #2b4a7a;background:#0a0f1a;color:#e6f0ff;font-size:14px;margin:8px 0}
+#modal button{padding:8px 16px;border-radius:6px;border:1px solid #2b4a7a;background:#162033;color:#cfe0ff;cursor:pointer;font-size:14px;margin-right:8px}
+#modal button.ok{background:#1b66f0;border-color:#6fb0ff}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="lp"><div id="plabel"></div><canvas id="prof" width="520" height="170"></canvas><div id="plab">профиль отростка: основание → кончик</div>
+<div id="tr"><button id="bPlay" title="Пуск / пауза">▶</button><button id="bRes" title="Сброс: вернуть рост в начало">⟲</button></div>
+<input id="prog" type="range" min="0" max="1000" value="0"><div id="progv">прогресс роста 0%</div>
+<div id="rbox"><div id="plab2">профиль корней (основание): окружность → контур</div><canvas id="rprof" width="520" height="260"></canvas></div></div>
+<div id="mypresets"></div>
+<div id="hud"></div>
+<div id="st"><div id="stt"></div><div id="stb"><i id="stf"></i></div></div>
+<div id="modal"><div><b>Сохранить пресет</b><input id="pname" placeholder="Название пресета" maxlength="40"><button class="ok" onclick="confirmSave()">Сохранить</button><button onclick="closeModal()">Отмена</button></div></div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
+<script>
+function fixChecker(S0,X,Y,Z,thr){ // убираем «шахматные» грани 2×2: из-за них рёбра меша становятся неманифольдными
+ const S=S0.slice(),e=thr+1e-3;let ch=1;
+ for(let pass=0;pass<8&&ch;pass++){ch=0;
+  for(const[a,b]of[[[1,0,0],[0,1,0]],[[0,1,0],[0,0,1]],[[1,0,0],[0,0,1]]])
+   for(let k=0;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=0;i<X-1;i++){
+    const i1=i+a[0],j1=j+a[1],k1=k+a[2],i2=i+b[0],j2=j+b[1],k2=k+b[2],i3=i1+b[0],j3=j1+b[1],k3=k1+b[2];if(i3>=X||j3>=Y||k3>=Z)continue;
+    const p=i+X*(j+Y*k),q=i1+X*(j1+Y*k1),r=i2+X*(j2+Y*k2),t=i3+X*(j3+Y*k3),A=S[p]>thr,B=S[q]>thr,C=S[r]>thr,D=S[t]>thr;
+    if(A&&D&&!B&&!C){S[S[q]>=S[r]?q:r]=e;ch++}else if(B&&C&&!A&&!D){S[S[p]>=S[t]?p:t]=e;ch++}}}
+ return S}
+function surfaceNets(S,X,Y,Z,thr,hs,ox,oy,oz){S=fixChecker(S,X,Y,Z,thr);const cid=new Int32Array((X-1)*(Y-1)*(Z-1)).fill(-1),V=[],I=[],
+  E=[[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]],val=new Float32Array(8);
+ for(let k=0;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=0;i<X-1;i++){let m=0;
+  for(let c=0;c<8;c++){val[c]=S[(i+(c&1))+X*((j+((c>>1)&1))+Y*(k+(c>>2)))];if(val[c]>thr)m|=1<<c}
+  if(m===0||m===255)continue;let cx=0,cy=0,cz=0,n=0;
+  for(const[a,b]of E){const va=val[a],vb=val[b];if((va>thr)!==(vb>thr)){const t=(thr-va)/(vb-va),ax=a&1,ay=(a>>1)&1,az=a>>2;
+   cx+=ax+t*((b&1)-ax);cy+=ay+t*(((b>>1)&1)-ay);cz+=az+t*((b>>2)-az);n++}}
+  cid[i+(X-1)*(j+(Y-1)*k)]=V.length/3;V.push(ox+(i-1+.5+cx/n)*hs,oy+(j-1+.5+cy/n)*hs,oz+(k-1+.5+cz/n)*hs)}
+ const C=(i,j,k)=>cid[i+(X-1)*(j+(Y-1)*k)],q=(a,b,c,d,fl)=>{if(a<0||b<0||c<0||d<0)return;if(fl)I.push(a,c,b,a,d,c);else I.push(a,b,c,a,c,d)},P=(i,j,k)=>S[i+X*(j+Y*k)];
+ for(let k=1;k<Z-1;k++)for(let j=1;j<Y-1;j++)for(let i=0;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i+1,j,k)>thr;if(a!==b)q(C(i,j-1,k-1),C(i,j,k-1),C(i,j,k),C(i,j-1,k),!a)}
+ for(let k=1;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=1;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i,j+1,k)>thr;if(a!==b)q(C(i-1,j,k-1),C(i-1,j,k),C(i,j,k),C(i,j,k-1),!a)}
+ for(let k=0;k<Z-1;k++)for(let j=1;j<Y-1;j++)for(let i=1;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i,j,k+1)>thr;if(a!==b)q(C(i-1,j-1,k),C(i,j-1,k),C(i,j,k),C(i-1,j,k),!a)}
+ return{V:Float32Array.from(V),I:Uint32Array.from(I)}}
+function keepLargest(V,I){const nv=V.length/3,par=new Int32Array(nv).map((_,i)=>i),f=a=>{while(par[a]!==a){par[a]=par[par[a]];a=par[a]}return a};
+ for(let t=0;t<I.length;t+=3){par[f(I[t])]=f(I[t+1]);par[f(I[t+1])]=f(I[t+2])}
+ const cnt=new Map();for(let t=0;t<I.length;t+=3){const r=f(I[t]);cnt.set(r,(cnt.get(r)||0)+1)}
+ let bc=0;for(const[,c]of cnt)bc=Math.max(bc,c);const keep=new Set();for(const[r,c]of cnt)if(c>=.05*bc)keep.add(r); // убираем только мелкие плавающие обломки
+ const map=new Int32Array(nv).fill(-1),nV=[],nI=[];
+ for(let t=0;t<I.length;t+=3){if(!keep.has(f(I[t])))continue;for(let q=0;q<3;q++){const v=I[t+q];if(map[v]<0){map[v]=nV.length/3;nV.push(V[3*v],V[3*v+1],V[3*v+2])}nI.push(map[v])}}
+ return{V:Float32Array.from(nV),I:Uint32Array.from(nI),removed:cnt.size-keep.size,parts:keep.size}}
+function taubin(V,I,n){if(!n)return;const nv=V.length/3,es=new Set();
+ for(let t=0;t<I.length;t+=3)for(let q=0;q<3;q++){const a=I[t+q],b=I[t+(q+1)%3];es.add(a<b?a*nv+b:b*nv+a)}
+ const deg=new Int32Array(nv+1);for(const e of es){deg[(e/nv|0)+1]++;deg[e%nv+1]++}for(let i=0;i<nv;i++)deg[i+1]+=deg[i];
+ const pos=deg.slice(0,nv),nb=new Int32Array(deg[nv]);for(const e of es){const a=e/nv|0,b=e%nv;nb[pos[a]++]=b;nb[pos[b]++]=a}
+ const T=new Float32Array(V.length),pass=l=>{for(let v=0;v<nv;v++){const s=deg[v],e=deg[v+1];if(e===s){T[3*v]=V[3*v];T[3*v+1]=V[3*v+1];T[3*v+2]=V[3*v+2];continue}
+   let x=0,y=0,z=0;for(let q=s;q<e;q++){x+=V[3*nb[q]];y+=V[3*nb[q]+1];z+=V[3*nb[q]+2]}const c=e-s;
+   T[3*v]=V[3*v]+l*(x/c-V[3*v]);T[3*v+1]=V[3*v+1]+l*(y/c-V[3*v+1]);T[3*v+2]=V[3*v+2]+l*(z/c-V[3*v+2])}V.set(T)};
+ for(let it=0;it<n;it++){pass(.5);pass(-.53)}}
+function meshVol(V,I){let v=0;for(let t=0;t<I.length;t+=3){const a=I[t],b=I[t+1],c=I[t+2];
+  v+=(V[3*a]*(V[3*b+1]*V[3*c+2]-V[3*b+2]*V[3*c+1])-V[3*a+1]*(V[3*b]*V[3*c+2]-V[3*b+2]*V[3*c])+V[3*a+2]*(V[3*b]*V[3*c+1]-V[3*b+1]*V[3*c]))/6}return v}
+function analyzeMesh(V,I){let vol=0;const nv=V.length/3,dir=new Map();
+ for(let t=0;t<I.length;t+=3){const a=I[t],b=I[t+1],c=I[t+2];
+  vol+=(V[3*a]*(V[3*b+1]*V[3*c+2]-V[3*b+2]*V[3*c+1])-V[3*a+1]*(V[3*b]*V[3*c+2]-V[3*b+2]*V[3*c])+V[3*a+2]*(V[3*b]*V[3*c+1]-V[3*b+1]*V[3*c]))/6;
+  for(let q=0;q<3;q++){const k=I[t+q]*nv+I[t+(q+1)%3];dir.set(k,(dir.get(k)||0)+1)}}
+ let bad=0;for(const[k,c]of dir){const a=k/nv|0,b=k%nv;if(c!==1||dir.get(b*nv+a)!==1)bad++}
+ return{vol,bad,tris:I.length/3}}
+
+// Продлеваем плотность за границу области на 2 слоя (потом обрезаем точной формой модели)
+
+
+
+// ===== Ключевые случайные числа: каждое значение зависит только от seed, ветки и «тега», а не от порядка вызовов =====
+// (поэтому смена числа пузырей, длины дочерних и т.п. не сдвигает остальные ветки)
+const mix=(h,v)=>{h=Math.imul(h^(v|0),0x85ebca6b);h^=h>>>13;h=Math.imul(h,0xc2b2ae35);return h^(h>>>16)};
+const hash=(a,b,c,d)=>mix(mix(mix(mix(0x9e3779b9,a),b),c),d)>>>0;
+const TG={len:1,phase:2,az:3,ang:4,pos:5,bub:6,aux:8};
+const childKey=(k,q)=>hash(k,q+101,977,3)|0;
+
+// ===== Параметры =====
+const BASE={baseR:1,tipR:.07,taperP:1.6,midBulge:.3,midPos:.4,midWidth:.45,bubbles:0,bubbleSize:.8,gens:2,kids:3,angle:50,spread:.4,kidLen:.6,kidThick:.6,len:10,curl:.6,tropism:.25,
+ noCross:true,bark:0,barkSize:1,rootsOn:true,roots:35,rootSeed:15432,joint:0,blend:.25};
+const COLDEF={useGrad:true,hue:.6,hueBase:.86,hueTip:.56};
+const cfg={seed:7,speed:1,hsm:.1,msm:4,sizeMM:100,exportWhat:'Единая форма',showMerged:true,...COLDEF,...BASE};
+const SAVEK=[...Object.keys(BASE),...Object.keys(COLDEF),'seed','speed','hsm','msm','sizeMM','exportWhat'];
+
+// ===== Профиль отростка: радиус как функция доли длины u (0 — основание, 1 — кончик) =====
+const bump=x=>Math.abs(x)>=1?0:.5*(1+Math.cos(Math.PI*x));
+function radiusAt(b,u,withBubbles=true){
+ let r=b.R1+(b.R0-b.R1)*Math.pow(Math.max(0,1-u),cfg.taperP); // сужение от основания к кончику
+ r*=1+cfg.midBulge*bump((u-cfg.midPos)/cfg.midWidth);            // раздувание середины
+ if(withBubbles)for(const q of b.bub)r+=q.a*bump((u-q.c)/q.w);   // случайные пузыри
+ if(b.collar){const x=u*b.len/b.collar.L;if(x<1){const w=1-x*x*(3-2*x);r+=Math.max(0,b.collar.R-r)*w}} // округлая фаска в месте отхода ветви
+ return Math.max(r,.004)}
+
+// ===== Генерация отростков =====
+const UP=new THREE.Vector3(0,1,0),V3=THREE.Vector3,MAXB=1500;
+const R01=(key,tag,i=0)=>hash(cfg.seed,key,tag,i)/4294967296;
+const perp=d=>new V3().crossVectors(d,Math.abs(d.y)<.9?UP:new V3(1,0,0)).normalize();
+let B=[],BARKREF=1;
+// пространственный хэш осевых точек для режима «без пересечений»
+const CELL=.8,TH=.3;let CH=new Map(),CTH=[];
+const ckey=(x,y,z)=>((Math.floor(x/CELL)+512)*1024+(Math.floor(y/CELL)+512))*1024+(Math.floor(z/CELL)+512);
+function commitPts(b){for(let i=0;i<b.N;i++){const p=b.pts[i],r=radiusAt(b,i/(b.N-1)),e={x:p.x,y:p.y,z:p.z,r,b:b.id,s:i*b.len/(b.N-1)};
+ if(r>TH)CTH.push(e);else{const k=ckey(p.x,p.y,p.z);let l=CH.get(k);if(!l)CH.set(k,l=[]);l.push(e)}}}
+const bubblesOf=(key,n,R0,size)=>{const a=[];for(let i=0;i<n;i++)a.push({c:.1+R01(key,TG.bub,i*3)*.82,w:.05+R01(key,TG.bub,i*3+1)*.07,a:size*R0*(.35+.65*R01(key,TG.bub,i*3+2))});return a};
+function makeBranch(s){ // осевая линия: изгиб и тропизм; отталкивание от других ветвей; для корней — прижатие к земле
+ const b={id:B.length,key:s.key,parent:s.parent,tpar:s.tpar,gen:s.gen,len:s.len,R0:s.R0,R1:Math.min(s.R1,s.R0),pts:[],nrm:[],bub:s.bub||[],t0:0,dt:1,N:s.N,M:s.M||18,C:s.C||5,collar:s.collar||null,ground:!!s.ground,anc:s.anc||[],zone:s.zone||0,bk:null};
+ const N=b.N,ds=s.len/(N-1),d=s.dir.clone().normalize(),p=s.pos.clone(),own=[],cross=cfg.noCross&&!s.free,zone=s.zone||0;let nr=perp(d);
+ const f1=(.7+R01(s.key,TG.phase,0))*6.2832/s.len,f2=(.7+R01(s.key,TG.phase,1))*6.2832/s.len,p1=R01(s.key,TG.phase,2)*6.2832,p2=R01(s.key,TG.phase,3)*6.2832;
+ const cm=s.curl,trop=s.trop===undefined?cfg.tropism:s.trop;
+ b.pts.push(p.clone());b.nrm.push(nr.clone());own.push({x:p.x,y:p.y,z:p.z,r:radiusAt(b,0),s:0,b:b.id});
+ const check=(q,r,sArc)=>{ // вектор отталкивания от других ветвей и от самой себя
+  let rx=0,ry=0,rz=0,hit=false;
+  const test=(o,self)=>{const dx=q.x-o.x,dy=q.y-o.y,dz=q.z-o.z,lim=(r+o.r)*.92;if(Math.abs(dx)>=lim||Math.abs(dy)>=lim||Math.abs(dz)>=lim)return;const dd=Math.sqrt(dx*dx+dy*dy+dz*dz);if(dd>=lim)return;
+   if(!self){if(sArc<zone)return;for(const a of b.anc)if(o.b===a.id&&Math.abs(o.s-a.s)<a.win)return} // у основания ветви допускается вход в родителя
+   const w=(lim-dd)/(dd||1);rx+=dx*w;ry+=dy*w;rz+=dz*w;hit=true};
+  const rn=Math.max(1,Math.ceil((r+TH)/CELL)),cx=Math.floor(q.x/CELL),cy=Math.floor(q.y/CELL),cz=Math.floor(q.z/CELL);
+  for(let a=-rn;a<=rn;a++)for(let bb=-rn;bb<=rn;bb++)for(let c=-rn;c<=rn;c++){const l=CH.get(((cx+a+512)*1024+(cy+bb+512))*1024+(cz+c+512));if(l)for(const o of l)test(o,false)}
+  for(const o of CTH)test(o,false);
+  for(const o of own)if(sArc-o.s>3*(r+o.r)+ds*2)test(o,true);
+  return hit?new V3(rx,ry,rz):null};
+ for(let k=1;k<N;k++){const sp=k*ds,u1=nr.clone(),u2=new V3().crossVectors(d,u1),rk=radiusAt(b,k/(N-1));
+  const a1=cm*Math.cos(f1*sp+p1)*ds*.5,a2=cm*Math.cos(f2*sp+p2)*ds*.5;
+  const dn=d.clone().addScaledVector(u1,a1).addScaledVector(u2,a2).addScaledVector(UP,trop*ds*.2).normalize();let pn=p.clone().addScaledVector(dn,ds);
+  if(b.ground&&pn.y<rk){pn.y=rk;dn.y=Math.max(dn.y,0);dn.normalize()} // корни не выходят за нижнюю плоскость
+  if(cross){let tries=0,rep;while((rep=check(pn,rk,sp))&&tries<5){dn.addScaledVector(rep.normalize(),.6+.4*tries).normalize();pn=p.clone().addScaledVector(dn,ds);if(b.ground&&pn.y<rk){pn.y=rk;dn.y=Math.max(dn.y,0)}tries++}
+   if(rep)break} // не удалось обойти препятствие — ветка заканчивается раньше
+  d.copy(dn);p.copy(pn);nr.addScaledVector(d,-nr.dot(d));if(nr.lengthSq()<1e-8)nr=perp(d);nr.normalize();b.pts.push(p.clone());b.nrm.push(nr.clone());own.push({x:p.x,y:p.y,z:p.z,r:rk,s:sp,b:b.id})}
+ if(b.pts.length<N){if(b.pts.length<6)return null; // слишком короткая — ветка не создаётся
+  b.N=b.pts.length;b.len=(b.N-1)*ds}
+ B.push(b);commitPts(b);return b}
+const ringM=R0=>cfg.bark>.001?(R0>cfg.baseR*.3?24:12):18; // для коры у толстых ветвей больше вершин в кольце
+function kidsOf(br,o,maxGen){
+ if(br.gen>=maxGen)return;
+ const n=Math.min(o.kidsMax||12,cfg.kids);
+ for(let q=0;q<n&&B.length<MAXB;q++){const key=childKey(br.key,q),t=.18+.62*((q+.3+R01(key,TG.pos)*.7)/n),
+   i=Math.min(br.N-2,Math.max(1,Math.round(t*(br.N-1)))),tan=new V3().subVectors(br.pts[i+1],br.pts[i-1]).normalize(),nrm=br.nrm[i],bin=new V3().crossVectors(tan,nrm),az=R01(key,TG.az)*6.2832,
+   side=nrm.clone().multiplyScalar(Math.cos(az)).addScaledVector(bin,Math.sin(az)),ang=cfg.angle*(1+cfg.spread*(R01(key,TG.ang)*2-1))*Math.PI/180,
+   dir=tan.clone().multiplyScalar(Math.cos(ang)).addScaledVector(side,Math.sin(ang)),len=br.len*cfg.kidLen*(1.1-t*.6)*(.75+.5*R01(key,TG.len)),
+   Rp=radiusAt(br,t,false),R0=Math.min(Rp*cfg.kidThick,br.R0*.9),R1=Math.min(br.R1,R0*.6); // дочерний всегда тоньше родителя в точке отхода
+  const nb=Math.round(cfg.bubbles*.7*Math.min(1,len/o.ref*1.2)),
+   kid=makeBranch({key,parent:br.id,tpar:t,gen:br.gen+1,pos:br.pts[i],dir,len,R0,R1,N:Math.max(16,Math.round(70*len/o.ref)),M:o.ground?12:ringM(R0),C:o.ground?3:5,curl:cfg.curl,trop:o.trop,ground:o.ground,
+    collar:cfg.joint>.01?{R:R0+(Rp-R0)*cfg.joint,L:cfg.joint*(Rp*2+.1)}:null,zone:2.5*(Rp+R0),anc:[...br.anc,{id:br.id,s:t*br.len,win:2.5*(Rp+R0)+.3}],bub:bubblesOf(key,nb,R0,cfg.bubbleSize)});
+  if(kid)kidsOf(kid,o,maxGen)}}
+// ===== Корни у основания: профиль сечения меняется от окружности (0) до лопастного контура (100); сид корней задаёт форму =====
+const rootsActive=()=>cfg.rootsOn&&cfg.roots>.01;
+const Rr=(tag,i=0)=>hash(cfg.rootSeed,771,tag,i)/4294967296;
+let RL=null;
+function makeRootLobes(tr){const n=5+Math.floor(Rr(0)*5),H0=2.2*tr.R0,lobes=[];
+ for(let i=0;i<n;i++)lobes.push({th:(i+(Rr(1,i)-.5)*.6)/n*6.2832,a:.45+.55*Rr(2,i),w:6.2832/n*(.28+.22*Rr(3,i)),H:H0*(.55+.9*Rr(4,i))}); // лопасти: угол, величина, ширина, высота подъёма по стволу
+ return{lobes,H0,m:9+Math.floor(Rr(5)*5),ph:Rr(6)*6.2832}}
+function rootL(th,s){ // 0 — окружность, 1 — край самой длинной лопасти; затухает вверх по стволу (разная высота у лопастей)
+ let L=0;for(const o of RL.lobes){let d=Math.abs(th-o.th)%6.2832;if(d>3.1416)d=6.2832-d;if(d<o.w){const q=Math.pow(1-d/o.w,1.6),v=s<o.H?Math.pow(1-s/o.H,1.8):0;L=Math.max(L,o.a*q*v)}}
+ const v0=s<RL.H0*.8?Math.pow(1-s/(RL.H0*.8),1.8):0,rip=.5+.5*Math.sin(RL.m*th+RL.ph);return Math.max(L,.2*rip*v0)} // между лопастями — мелкая волнистость
+function makeRootTable(b){const N=b.N,M=b.M,t=new Float32Array(N*M),ds=b.len/(N-1);for(let k=0;k<N;k++){const s=k*ds;if(s>RL.H0*1.7)break;for(let j=0;j<M;j++)t[k*M+j]=rootL(j*6.2832/M,s)}return t}
+// кора: таблица смещений для каждого кольца/вершины (гребни вдоль ствола с извилистостью)
+function makeBark(b){if(!(cfg.bark>.001)||b.M<20)return null;
+ const N=b.N,M=b.M,bk=new Float32Array(N*M),ds=b.len/(N-1),m1=Math.max(2,Math.min(5,Math.round(4.5/cfg.barkSize))),m2=m1+3,m3=m1+6,
+  p1=R01(b.key,TG.aux,10)*6.28,p2=R01(b.key,TG.aux,11)*6.28,p3=R01(b.key,TG.aux,12)*6.28,ph=R01(b.key,TG.aux,13)*6.28,w=.9/cfg.barkSize;
+ for(let k=0;k<N;k++){const s=k*ds;for(let j=0;j<M;j++){const th=j*6.2832/M,raw=.55*Math.cos(m1*th+p1+.8*Math.sin(w*s*.5+ph))+.3*Math.cos(m2*th+p2+.6*Math.sin(w*s*.9))+.15*Math.cos(m3*th+p3+w*s*.2);
+  bk[k*M+j]=1-Math.abs(raw*1.15)-.3}}
+ return bk}
+function genBranches(){
+ B=[];CH=new Map();CTH=[];BARKREF=1;
+ const key=hash(1,1,1,1)|0,R0=cfg.baseR,o={trop:cfg.tropism,ref:cfg.len};
+ const tr=makeBranch({key,parent:-1,tpar:0,gen:0,pos:new V3(0,0,0),dir:UP,len:cfg.len,R0,R1:Math.min(cfg.tipR,R0),N:70,M:rootsActive()?48:ringM(R0),C:5,curl:cfg.curl,trop:cfg.tropism,
+  bub:bubblesOf(key,Math.round(cfg.bubbles),R0,cfg.bubbleSize)});
+ if(tr)kidsOf(tr,o,cfg.gens);RL=tr&&rootsActive()?makeRootLobes(tr):null;
+ // расписание: ветка начинает расти, когда родитель дорос до места отхода
+ const ref=Math.max(...B.map(b=>b.len),.001),byId=new Map(B.map(b=>[b.id,b]));
+ for(const b of B){const P=b.parent>=0?byId.get(b.parent):null;b.dt=Math.max(.08,b.len/ref);b.t0=P?P.t0+P.dt*b.tpar:0}
+ let tm=0;for(const b of B)tm=Math.max(tm,b.t0+b.dt);for(const b of B){b.t0/=tm;b.dt/=tm}
+ BARKREF=Math.max(.001,...B.filter(b=>b.gen===0&&!b.ground).map(b=>b.R0));
+ for(const b of B){b.bk=makeBark(b);b.rt=RL&&b===B[0]?makeRootTable(b):null}}
+
+// ===== Цвет: одна заливка или градиент от основания к кончикам =====
+const clr=new THREE.Color();
+function branchColor(g,u){const t=Math.min(1,u*.75+g*.12),h=cfg.useGrad?cfg.hueBase+(cfg.hueTip-cfg.hueBase)*t:cfg.hue;clr.setHSL(((h%1)+1)%1,.62,.3+.3*u);return clr}
+
+// ===== Полигональная сетка: кольца вдоль оси + закруглённый кончик + кора =====
+const canvas=document.getElementById('c'),renderer=new THREE.WebGLRenderer({canvas,antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x05060a);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,500),controls=new THREE.OrbitControls(camera,canvas);controls.enableDamping=true;
+scene.add(new THREE.HemisphereLight(0xaabbdd,0x181820,.7));const key=new THREE.DirectionalLight(0xffffff,1.1);key.position.set(5,10,7);scene.add(key);
+const fillL=new THREE.DirectionalLight(0x8fa8d8,.35);fillL.position.set(-6,4,-8);scene.add(fillL); // мягкая контровая подсветка
+scene.add(new THREE.GridHelper(40,40,0x16213a,0x0d1424));
+let geo=null,meshT=null,pos,nor,col,idx,iCount=0,vCount=0;
+function allocTubes(){let nv=0,ni=0;for(const b of B){const R=b.N+b.C+1;nv+=R*b.M+2;ni+=R*b.M*6+b.M*6}
+ pos=new Float32Array(nv*3);nor=new Float32Array(nv*3);col=new Float32Array(nv*3);idx=new Uint32Array(ni);
+ if(!geo){geo=new THREE.BufferGeometry();meshT=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.5,metalness:.04}));meshT.frustumCulled=false;scene.add(meshT)}
+ geo.setAttribute('position',new THREE.BufferAttribute(pos,3));geo.setAttribute('normal',new THREE.BufferAttribute(nor,3));geo.setAttribute('color',new THREE.BufferAttribute(col,3));geo.setIndex(new THREE.BufferAttribute(idx,1))}
+const tabv=(tab,b,kf,j)=>{const N=b.N,M=b.M;kf=Math.max(0,Math.min(N-1.0001,kf));const k=Math.floor(kf),f=kf-k;j=((j%M)+M)%M;return tab[k*M+j]*(1-f)+tab[(k+1)*M+j]*f};
+function fillTubes(prog){
+ let vi=0,ii=0;const t=new V3(),n=new V3(),bn=new V3(),rd=new V3(),p=new V3(),RK=1.1*cfg.roots/100;
+ const addRing=(b,r,center,tan,nr,u,capPhi,kf)=>{const Mb=b.M;bn.crossVectors(tan,nr);branchColor(b.gen,u);const base=vi,ring=capPhi===null&&kf>=0,bkOn=ring&&b.bk,rtOn=ring&&b.rt,A=bkOn?.45*cfg.bark*Math.pow(Math.min(1,r/BARKREF),1.5):0;
+  for(let j=0;j<Mb;j++){const th=j*2*Math.PI/Mb,c=Math.cos(th),sn=Math.sin(th);rd.set(nr.x*c+bn.x*sn,nr.y*c+bn.y*sn,nr.z*c+bn.z*sn);
+   let rr=capPhi===null?r:r*Math.cos(capPhi);const off=capPhi===null?0:r*Math.sin(capPhi);
+   if(ring){let m=1;if(bkOn&&A>.002)m*=1+A*tabv(b.bk,b,kf,j);if(rtOn)m*=1+RK*tabv(b.rt,b,kf,j);rr=r*m} // кора и корни меняют радиус по углу
+   pos[vi*3]=center.x+rd.x*rr+tan.x*off;pos[vi*3+1]=Math.max(0,center.y+rd.y*rr+tan.y*off);pos[vi*3+2]=center.z+rd.z*rr+tan.z*off; // ничто не уходит под плоскость земли
+   col[vi*3]=clr.r;col[vi*3+1]=clr.g;col[vi*3+2]=clr.b;vi++}
+  return base};
+ const link=(b,r0,r1)=>{const Mb=b.M;for(let j=0;j<Mb;j++){const a=r0+j,c=r0+(j+1)%Mb,d=r1+j,e=r1+(j+1)%Mb;idx[ii++]=a;idx[ii++]=c;idx[ii++]=d;idx[ii++]=c;idx[ii++]=e;idx[ii++]=d}};
+ for(const b of B){
+  const x=(prog-b.t0)/b.dt;if(x<=0)continue;const g=1-Math.pow(1-Math.min(1,x),2),N=b.N,sEnd=Math.max(g*(N-1),.01),i0=Math.min(N-2,Math.floor(sEnd));
+  const ss=[];for(let k=0;k<=i0;k++)ss.push(k);if(sEnd-i0>1e-3||i0===0)ss.push(sEnd);
+  let prev=-1,last=null;
+  for(let q=0;q<ss.length;q++){const s=ss[q],j=Math.min(N-2,Math.floor(s)),f=s-j;
+   p.lerpVectors(b.pts[j],b.pts[j+1],f);n.lerpVectors(b.nrm[j],b.nrm[j+1],f).normalize();t.subVectors(b.pts[j+1],b.pts[j]).normalize();
+   const u=s/(N-1),r=radiusAt(b,u);
+   if(q===0&&b.parent<0){ // плоское основание
+    const cb=vi;pos[vi*3]=p.x;pos[vi*3+1]=Math.max(0,p.y);pos[vi*3+2]=p.z;branchColor(b.gen,0);col[vi*3]=clr.r;col[vi*3+1]=clr.g;col[vi*3+2]=clr.b;vi++;
+    const r0=addRing(b,r,p,t,n,u,null,s);for(let jj=0;jj<b.M;jj++){idx[ii++]=r0+(jj+1)%b.M;idx[ii++]=r0+jj;idx[ii++]=cb}prev=r0}
+   else{const r1=addRing(b,r,p,t,n,u,null,s);if(prev>=0)link(b,prev,r1);prev=r1}
+   last={p:p.clone(),t:t.clone(),n:n.clone(),r,u}}
+  for(let q=1;q<b.C;q++){const phi=q/b.C*Math.PI/2,r1=addRing(b,last.r,last.p,last.t,last.n,last.u,phi,-1);link(b,prev,r1);prev=r1}
+  const pole=vi;pos[vi*3]=last.p.x+last.t.x*last.r;pos[vi*3+1]=Math.max(0,last.p.y+last.t.y*last.r);pos[vi*3+2]=last.p.z+last.t.z*last.r;
+  branchColor(b.gen,last.u);col[vi*3]=clr.r;col[vi*3+1]=clr.g;col[vi*3+2]=clr.b;vi++;
+  for(let j=0;j<b.M;j++){idx[ii++]=prev+j;idx[ii++]=prev+(j+1)%b.M;idx[ii++]=pole}}
+ // гладкие нормали: накапливаем нормали граней в вершинах
+ nor.fill(0,0,vi*3);
+ for(let q=0;q<ii;q+=3){const a=idx[q]*3,b=idx[q+1]*3,c=idx[q+2]*3,ux=pos[b]-pos[a],uy=pos[b+1]-pos[a+1],uz=pos[b+2]-pos[a+2],vx=pos[c]-pos[a],vy=pos[c+1]-pos[a+1],vz=pos[c+2]-pos[a+2],nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+  nor[a]+=nx;nor[a+1]+=ny;nor[a+2]+=nz;nor[b]+=nx;nor[b+1]+=ny;nor[b+2]+=nz;nor[c]+=nx;nor[c+1]+=ny;nor[c+2]+=nz}
+ for(let q=0;q<vi*3;q+=3){const l=Math.hypot(nor[q],nor[q+1],nor[q+2])||1;nor[q]/=l;nor[q+1]/=l;nor[q+2]/=l}
+ iCount=ii;vCount=vi;geo.setDrawRange(0,ii);for(const a of['position','normal','color'])geo.attributes[a].needsUpdate=true;geo.index.needsUpdate=true}
+
+// ===== Предпросмотр профиля: горизонтально, основание слева, кончик справа =====
+function drawProfile(){const cv=document.getElementById('prof'),x=cv.getContext('2d'),W=cv.width,H=cv.height,b=B[0];if(!b)return;x.clearRect(0,0,W,H);
+ let mr=.001;for(let i=0;i<=120;i++)mr=Math.max(mr,radiusAt(b,i/120));const tipR=radiusAt(b,1),sc=(H/2-12)/mr,x0=18,L=W-36-sc*tipR;
+ const gr=x.createLinearGradient(0,0,0,H);gr.addColorStop(0,'#5a6270');gr.addColorStop(.5,'#b4bdcd');gr.addColorStop(1,'#4a5260');x.fillStyle=gr;x.strokeStyle='#cfe0ff';x.lineWidth=2;
+ x.beginPath();for(let i=0;i<=120;i++){const u=i/120;x.lineTo(x0+u*L,H/2-radiusAt(b,u)*sc)}
+ x.arc(x0+L,H/2,tipR*sc,-Math.PI/2,Math.PI/2,false);for(let i=120;i>=0;i--){const u=i/120;x.lineTo(x0+u*L,H/2+radiusAt(b,u)*sc)}x.closePath();x.fill();x.stroke()}
+
+function drawRootProfile(){const box=document.getElementById('rbox'),cv=document.getElementById('rprof'),x=cv.getContext('2d'),W=cv.width,H=cv.height;box.style.display=cfg.rootsOn?'block':'none';x.clearRect(0,0,W,H);if(!rootsActive()||!RL)return;
+ const amt=cfg.roots/100,cx=W/2,cy=H/2,sc=(H/2-16)/(1+1.1*amt);
+ x.strokeStyle='#3e3a18';x.lineWidth=1;x.beginPath();x.moveTo(cx-sc*2.3,cy);x.lineTo(cx+sc*2.3,cy);x.moveTo(cx,cy-H/2+8);x.lineTo(cx,cy+H/2-8);x.stroke();
+ x.strokeStyle='#8a7a2a';x.lineWidth=2;x.beginPath();x.arc(cx,cy,sc,0,6.2832);x.stroke(); // окружность — ствол без корней (0)
+ x.strokeStyle='#ffe44d';x.lineWidth=3;x.beginPath();for(let i=0;i<=360;i++){const th=i/360*6.2832,r=1+1.1*amt*rootL(th,0),px=cx+Math.cos(th)*r*sc,py=cy+Math.sin(th)*r*sc;i?x.lineTo(px,py):x.moveTo(px,py)}x.closePath();x.stroke()}
+// ===== Единая форма: гладкое слияние отростков (гладкий максимум полей) → Surface Nets =====
+const tk=()=>new Promise(r=>setTimeout(r,0));
+let stT;function status(t,p,hide){const s=document.getElementById('st'),f=document.getElementById('stf');clearTimeout(stT);s.style.display='block';document.getElementById('stt').textContent=t;f.style.width=(p==null?40:p)+'%';f.className=p==null?'ind':'';if(hide)stT=setTimeout(()=>s.style.display='none',4000)}
+const smax=(a,b,k)=>{if(k<1e-6)return Math.max(a,b);const h=Math.max(k-Math.abs(a-b),0)/k;return Math.max(a,b)+h*h*k*.25};
+let meshM=null,mergeTok=0,mergedInfo='';
+async function buildMerged(tok,quiet){
+ const k=cfg.blend,mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];let rmax=0;
+ for(const b of B){for(let i=0;i<b.N;i++)rmax=Math.max(rmax,radiusAt(b,i/(b.N-1)));for(const p of b.pts){mn[0]=Math.min(mn[0],p.x);mx[0]=Math.max(mx[0],p.x);mn[1]=Math.min(mn[1],p.y);mx[1]=Math.max(mx[1],p.y);mn[2]=Math.min(mn[2],p.z);mx[2]=Math.max(mx[2],p.z)}}
+ const mar=rmax*(1+(rootsActive()?1.1*cfg.roots/100:0))+k+.3;let hs=cfg.hsm,X,Y,Z;const hs0=hs;
+ for(;;){X=Math.ceil((mx[0]-mn[0]+2*mar)/hs)+6;Y=Math.ceil((mx[1]-mn[1]+2*mar)/hs)+6;Z=Math.ceil((mx[2]-mn[2]+2*mar)/hs)+6;if(X*Y*Z<=6e6)break;hs*=1.08}
+ const ox=mn[0]-mar-3*hs,oy=mn[1]-mar-3*hs,oz=mn[2]-mar-3*hs,F=new Float32Array(X*Y*Z).fill(-1e3),own=new Uint32Array(X*Y*Z);
+ for(let bi=0;bi<B.length;bi++){const b=B[bi];let bmn=[1e9,1e9,1e9],bmx=[-1e9,-1e9,-1e9],br=0;
+  for(let i=0;i<b.N;i++)br=Math.max(br,radiusAt(b,i/(b.N-1)));
+  for(const p of b.pts){bmn[0]=Math.min(bmn[0],p.x);bmx[0]=Math.max(bmx[0],p.x);bmn[1]=Math.min(bmn[1],p.y);bmx[1]=Math.max(bmx[1],p.y);bmn[2]=Math.min(bmn[2],p.z);bmx[2]=Math.max(bmx[2],p.z)}
+  const extra=(b===B[0]&&RL&&rootsActive())?1.1*cfg.roots/100*br:0,R=Math.max(br,.75*hs)+k+2*hs+extra,i0=Math.max(0,Math.floor((bmn[0]-R-ox)/hs)),i1=Math.min(X-1,Math.ceil((bmx[0]+R-ox)/hs)),j0=Math.max(0,Math.floor((bmn[1]-R-oy)/hs)),j1=Math.min(Y-1,Math.ceil((bmx[1]+R-oy)/hs)),k0=Math.max(0,Math.floor((bmn[2]-R-oz)/hs)),k1=Math.min(Z-1,Math.ceil((bmx[2]+R-oz)/hs)),
+   nx=i1-i0+1,ny=j1-j0+1,nz=k1-k0+1,S=new Float32Array(nx*ny*nz).fill(-1e3),U=new Uint8Array(nx*ny*nz);
+  const stamp=(cx,cy,cz,r,u8)=>{const Rr=r+k+2*hs,a0=Math.max(i0,Math.floor((cx-Rr-ox)/hs)),a1=Math.min(i1,Math.ceil((cx+Rr-ox)/hs)),b0=Math.max(j0,Math.floor((cy-Rr-oy)/hs)),b1=Math.min(j1,Math.ceil((cy+Rr-oy)/hs)),c0=Math.max(k0,Math.floor((cz-Rr-oz)/hs)),c1=Math.min(k1,Math.ceil((cz+Rr-oz)/hs)),R2=Rr*Rr;
+   for(let c=c0;c<=c1;c++){const dz=oz+c*hs-cz;for(let bb=b0;bb<=b1;bb++){const dy=oy+bb*hs-cy,q0=dy*dy+dz*dz;if(q0>R2)continue;
+    for(let a=a0;a<=a1;a++){const dx=ox+a*hs-cx,d2=dx*dx+q0;if(d2>R2)continue;const v=r-Math.sqrt(d2),q=(a-i0)+nx*((bb-j0)+ny*(c-k0));if(v>S[q]){S[q]=v;U[q]=u8}}}}};
+  let s=0;const total=b.len;
+  while(s<=total+1e-6){const u=Math.min(1,s/total),fi=u*(b.N-1),j=Math.min(b.N-2,Math.floor(fi)),f=fi-j,x=b.pts[j].x+(b.pts[j+1].x-b.pts[j].x)*f,y=b.pts[j].y+(b.pts[j+1].y-b.pts[j].y)*f,z=b.pts[j].z+(b.pts[j+1].z-b.pts[j].z)*f,r=Math.max(radiusAt(b,u),.75*hs);
+   stamp(x,y,z,r,Math.round(u*255));s+=Math.max(.8*hs,.3*r)}
+  {const e=b.pts[b.N-1],r=Math.max(radiusAt(b,1),.75*hs);stamp(e.x,e.y,e.z,r,255)}
+  if(extra>0){const amt=cfg.roots/100,dsb=b.len/(b.N-1); // корни: шары вдоль гребня каждой лопасти
+   for(const o of RL.lobes)for(let s=0;s<o.H;s+=Math.max(.5*hs,.2*b.R0)){const kk=Math.min(b.N-2,Math.round(s/dsb)),pt=b.pts[kk],nr=b.nrm[kk],tt=b.pts[kk+1].clone().sub(b.pts[kk]).normalize(),bin=new V3().crossVectors(tt,nr),r=radiusAt(b,kk/(b.N-1),false),ext=1.1*amt*rootL(o.th,s)*r;
+    if(ext<.5*hs)continue;const rad=Math.max(ext*.55,.75*hs),c=Math.cos(o.th),sn=Math.sin(o.th),d=r+ext*.5;stamp(pt.x+(nr.x*c+bin.x*sn)*d,pt.y+(nr.y*c+bin.y*sn)*d,pt.z+(nr.z*c+bin.z*sn)*d,rad,Math.round(kk/(b.N-1)*255))}}
+  for(let c=0;c<nz;c++)for(let bb=0;bb<ny;bb++)for(let a=0;a<nx;a++){const q=a+nx*(bb+ny*c),v=S[q];if(v<-500)continue;const g=(a+i0)+X*((bb+j0)+Y*(c+k0)),G=F[g];if(v>G)own[g]=bi*256+U[q];F[g]=smax(G,v,k)}
+  if(bi%25===0){if(!quiet)status('Слияние отростков…',5+Math.round(bi/B.length*55));await tk();if(tok!==undefined&&tok!==mergeTok)return null}}
+ if(!quiet)status('Построение поверхности…',65);await tk();if(tok!==undefined&&tok!==mergeTok)return null;
+ let m=surfaceNets(F,X,Y,Z,0,hs,ox+.5*hs,oy+.5*hs,oz+.5*hs);if(!m.I.length)throw new Error('поверхность пуста');
+ const kl=keepLargest(m.V,m.I);m={V:kl.V,I:kl.I};taubin(m.V,m.I,cfg.msm);for(let i=1;i<m.V.length;i+=3)if(m.V[i]<0)m.V[i]=0;
+ const a=analyzeMesh(m.V,m.I);if(a.vol<0){for(let t=0;t<m.I.length;t+=3){const q=m.I[t+1];m.I[t+1]=m.I[t+2];m.I[t+2]=q}a.vol=-a.vol}
+ const cl=new Float32Array(m.V.length);
+ for(let v=0;v<m.V.length/3;v++){const i=Math.min(X-1,Math.max(0,Math.round((m.V[3*v]-ox)/hs))),j=Math.min(Y-1,Math.max(0,Math.round((m.V[3*v+1]-oy)/hs))),kk=Math.min(Z-1,Math.max(0,Math.round((m.V[3*v+2]-oz)/hs)));
+  const id=own[i+X*(j+Y*kk)],b=B[Math.min(B.length-1,id>>8)];branchColor(b.gen,(id&255)/255);cl[3*v]=clr.r;cl[3*v+1]=clr.g;cl[3*v+2]=clr.b}
+ return{V:m.V,I:m.I,cl,hs,thick:hs>hs0*1.02,vol:a.vol,bad:a.bad,tris:a.tris,parts:kl.parts}}
+function clearMerged(){mergeTok++;if(meshM){scene.remove(meshM);meshM.geometry.dispose();meshM=null}mergedInfo='';if(meshT)meshT.visible=true}
+function showMergedView(){if(meshM){meshM.visible=cfg.showMerged;meshT.visible=!cfg.showMerged}}
+async function createMerged(){const tok=++mergeTok;
+ try{prog=1;playing=false;fillTubes(1);syncTransport();const r=await buildMerged(tok,false);if(!r||tok!==mergeTok)return;
+  const g2=new THREE.BufferGeometry();g2.setAttribute('position',new THREE.BufferAttribute(r.V,3));g2.setAttribute('color',new THREE.BufferAttribute(r.cl,3));g2.setIndex(new THREE.BufferAttribute(r.I,1));g2.computeVertexNormals();
+  if(meshM){scene.remove(meshM);meshM.geometry.dispose()}meshM=new THREE.Mesh(g2,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.5,metalness:.04}));scene.add(meshM);cfg.showMerged=true;showMergedView();
+  mergedInfo='<br><b>Единая форма:</b> '+r.tris+' треуг.'+(r.bad?' · <span style="color:#ff6b6b">открытых рёбер: '+r.bad+'</span>':' · <span style="color:#5fe08a">замкнута ✓</span>')+(r.thick?'<br><span style="color:#ffb86b">сетка укрупнена (память): тонкие кончики утолщены</span>':'')+(cfg.bark>.001?'<br><span style="color:#ffb86b">кора в единой форме не передаётся (есть в «Трубки»)</span>':'');
+  gui.controllersRecursive().forEach(c=>c.updateDisplay());status('Единая форма готова: '+r.tris+' треугольников',100,true)}
+ catch(e){status('Ошибка: '+e.message,100,true);console.error(e)}}
+
+// ===== Экспорт (STL / OBJ) =====
+let DLp=null;function getDL(){if(DLp)return DLp;if(!(window.claude&&window.claude.use))return Promise.resolve(null);return DLp=window.claude.use('downloads').catch(()=>null)}getDL();
+function fallbackSave(name,data){const real=name.replace(/\.(obj|stl)\.txt$/,'.$1'),url=URL.createObjectURL(data instanceof Blob?data:new Blob([data]));status('',100);
+ document.getElementById('stt').innerHTML='<span onclick="this.parentNode.parentNode.style.display=\'none\'" style="cursor:pointer;float:right;margin-left:12px">✕</span>Файл готов: <a download="'+real+'" href="'+url+'" style="color:#7db4ff">Скачать '+real+'</a>'}
+async function saveFile(name,data){status('Ожидание подтверждения сохранения…',null);
+ try{const d=await getDL();if(!d){fallbackSave(name,data);return}await d.save({filename:name,data});status('Сохранено: '+name+' ✓',100,true)}
+ catch(e){const c=e&&e.code;status(c==='declined'?'Сохранение отменено':'Ошибка сохранения'+(c?' ('+c+')':''),100,true)}}
+function meshBox(V){const mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];for(let i=0;i<V.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[i+d]);mx[d]=Math.max(mx[d],V[i+d])}return{mn,mx,x:mx[0]-mn[0],y:mx[1]-mn[1],z:mx[2]-mn[2]}}
+function printCoords(V){ // Y-вверх → Z-вверх, центр по XY, низ на z=0, длиннейшая сторона = «Размер при печати, мм»
+ const b=meshBox(V),k=cfg.sizeMM/Math.max(b.x,b.y,b.z),o=new Float32Array(V.length),cx=(b.mn[0]+b.mx[0])/2,cz=(b.mn[2]+b.mx[2])/2;
+ for(let i=0;i<V.length;i+=3){o[i]=(V[i]-cx)*k;o[i+1]=-(V[i+2]-cz)*k;o[i+2]=(V[i+1]-b.mn[1])*k}return o}
+let expBusy=false;
+async function getExportMesh(){
+ if(cfg.exportWhat==='Единая форма'){status('Экспорт: построение единой формы…',5);const r=await buildMerged(undefined,false);return r&&{V:r.V,I:r.I}}
+ fillTubes(1);const V=pos.slice(0,vCount*3),I=idx.slice(0,iCount);fillTubes(prog);return{V,I}}
+function stlBuffer(V,I){const nt=I.length/3,buf=new ArrayBuffer(84+nt*50),dv=new DataView(buf);dv.setUint32(80,nt,true);
+ for(let t=0;t<nt;t++){const a=I[3*t],b=I[3*t+1],c=I[3*t+2],o=84+t*50,ux=V[3*b]-V[3*a],uy=V[3*b+1]-V[3*a+1],uz=V[3*b+2]-V[3*a+2],vx=V[3*c]-V[3*a],vy=V[3*c+1]-V[3*a+1],vz=V[3*c+2]-V[3*a+2];
+  let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;const l=Math.hypot(nx,ny,nz)||1;[nx/l,ny/l,nz/l].forEach((q,i)=>dv.setFloat32(o+4*i,q,true));
+  [a,b,c].forEach((v,k)=>{for(let d=0;d<3;d++)dv.setFloat32(o+12+12*k+4*d,V[3*v+d],true)})}
+ return buf}
+function objText(V,I){const out=['# Organik 2 (mm, Z-up)','o organik2'];for(let i=0;i<V.length;i+=3)out.push('v '+V[i].toFixed(3)+' '+V[i+1].toFixed(3)+' '+V[i+2].toFixed(3));
+ for(let i=0;i<I.length;i+=3)out.push('f '+(I[i]+1)+' '+(I[i+1]+1)+' '+(I[i+2]+1));return out.join('\n')}
+async function exportModel(fmt){if(expBusy)return;expBusy=true;
+ try{if(!B.length)return;const m=await getExportMesh();if(!m){status('Нечего экспортировать',100,true);return}
+  const V=printCoords(m.V),I=m.I;status('Подготовка файла…',80);await tk();
+  if(fmt==='stl')await saveFile('organik2.stl.txt',new Blob([stlBuffer(V,I)]));else await saveFile('organik2.obj.txt',new Blob([objText(V,I)]))
+ }catch(e){status('Ошибка экспорта: '+e.message,100,true);console.error(e)}finally{expBusy=false}}
+
+// ===== Свои пресеты (сохраняются в браузере) =====
+let prog=0,playing=true,curUser=-2,USER=[]; // curUser: -1 — «По умолчанию», -2 — несохранённые настройки
+const LSK='organik2.userPresets';
+function loadUser(){try{USER=JSON.parse(localStorage.getItem(LSK)||'[]')}catch(e){USER=[]}if(!Array.isArray(USER))USER=[]}
+function persistUser(){try{localStorage.setItem(LSK,JSON.stringify(USER));return true}catch(e){status('Не удалось сохранить: хранилище браузера недоступно',100,true);return false}}
+function updateLabel(){document.getElementById('plabel').textContent=curUser>=0?USER[curUser].name:curUser===-1?'По умолчанию':'Мои настройки'}
+function renderUser(){const box=document.getElementById('mypresets');box.innerHTML='';
+ const df=document.createElement('button');df.textContent='По умолчанию';if(curUser===-1)df.className='on';df.onclick=applyDefault;box.appendChild(df);
+ USER.forEach((u,i)=>{const bt=document.createElement('button');bt.textContent=u.name;if(i===curUser)bt.className='on';bt.onclick=()=>applyUser(i);
+  const x=document.createElement('span');x.className='x';x.textContent='×';x.title='Удалить пресет';x.onclick=e=>{e.stopPropagation();USER.splice(i,1);if(curUser===i)curUser=-2;else if(curUser>i)curUser--;persistUser();renderUser();updateLabel();status('Пресет удалён',100,true)};bt.appendChild(x);box.appendChild(bt)});
+ const sv=document.createElement('button');sv.textContent='💾 Сохранить пресет';sv.className='sv';sv.onclick=openSave;box.appendChild(sv)}
+function openSave(){const inp=document.getElementById('pname');document.getElementById('modal').style.display='flex';inp.value=curUser>=0?USER[curUser].name:'';inp.focus&&inp.focus()}
+function closeModal(){document.getElementById('modal').style.display='none'}
+function confirmSave(){const name=(document.getElementById('pname').value||'').trim().slice(0,40);if(!name){status('Введите название пресета',100,true);return}
+ const vals={};for(const k of SAVEK)vals[k]=cfg[k];const i=USER.findIndex(u=>u.name===name),rec={name,vals};
+ if(i>=0)USER[i]=rec;else USER.push(rec);curUser=i>=0?i:USER.length-1;closeModal();if(persistUser())status('Пресет «'+name+'» сохранён',100,true);renderUser();updateLabel()}
+function applyVals(v){Object.assign(cfg,v);gui.controllersRecursive().forEach(c=>c.updateDisplay());syncColorUI();prog=0;playing=true;regen();syncTransport()}
+function applyUser(i){const u=USER[i];if(!u)return;curUser=i;applyVals(u.vals);renderUser();updateLabel()}
+function applyDefault(){curUser=-1;applyVals({...BASE,...COLDEF,seed:7,speed:1,hsm:.1,msm:4,sizeMM:100,exportWhat:'Единая форма'});renderUser();updateLabel()}
+function touched(){if(curUser!==-2){curUser=-2;renderUser();updateLabel()}} // правка параметров отвязывает от выбранного пресета
+function regen(){clearMerged();genBranches();allocTubes();fillTubes(prog);drawProfile();drawRootProfile()}
+function setProg(v){prog=Math.max(0,Math.min(1,v));if(meshM)clearMerged();fillTubes(prog)}
+
+// ===== Управление ростом (значки, как в плеере) =====
+const bPlay=document.getElementById('bPlay'),progEl=document.getElementById('prog'),progV=document.getElementById('progv');
+function syncTransport(){const on=playing&&prog<1;bPlay.textContent=on?'⏸':'▶';bPlay.className=on?'pl':'';progEl.value=Math.round(prog*1000);progV.textContent='прогресс роста '+Math.round(prog*100)+'%'}
+const ctrl={
+ play(){if(playing&&prog<1)playing=false;else{if(prog>=1)prog=0;playing=true;clearMerged()}syncTransport()},
+ reset(){playing=false;prog=0;clearMerged();fillTubes(0);syncTransport()}};
+bPlay.onclick=ctrl.play;document.getElementById('bRes').onclick=ctrl.reset;
+progEl.oninput=()=>{playing=false;setProg(progEl.value/1000);syncTransport()};
+
+// ===== Панель параметров =====
+const gui=new lil.GUI({title:'Отростки'});
+const fP=gui.addFolder('Отросток (профиль)'),fB=gui.addFolder('Ответвления'),fF=gui.addFolder('Форма'),fK=gui.addFolder('Кора и корни'),fJ=gui.addFolder('Соединения'),fC=gui.addFolder('Цвет'),fG=gui.addFolder('Рост'),fM=gui.addFolder('Единая форма (слияние)'),fX=gui.addFolder('Экспорт');
+const onP=()=>{touched();regen()};
+const add=(f,name,min,max,step,label)=>f.add(cfg,name,min,max,step).name(label).onChange(onP);
+const spectrum=c=>{c.$slider.style.background='linear-gradient(to right,hsl(0,75%,50%),hsl(45,75%,50%),hsl(90,75%,45%),hsl(150,75%,42%),hsl(200,80%,50%),hsl(250,75%,58%),hsl(300,75%,52%),hsl(360,75%,50%))';c.$slider.style.height='20px';c.$fill.style.background='transparent';c.$fill.style.borderRight='3px solid #fff';c.$fill.style.boxShadow='1px 0 0 #000'};
+add(fP,'baseR',.1,3,.01,'Толщина основания');add(fP,'tipR',0,1.5,.005,'Толщина кончика');add(fP,'taperP',.5,3,.01,'Кривизна сужения');
+add(fP,'midBulge',0,2,.01,'Раздувание середины');add(fP,'midPos',.1,.9,.01,'Положение раздувания');add(fP,'midWidth',.1,.9,.01,'Ширина раздувания');
+add(fP,'bubbles',0,12,1,'Пузыри: количество');add(fP,'bubbleSize',0,2,.01,'Пузыри: размер');
+add(fB,'gens',0,4,1,'Поколений');add(fB,'kids',0,6,1,'Ответвлений на отросток');add(fB,'angle',10,90,1,'Угол отхода');add(fB,'spread',0,1,.01,'Разброс угла');add(fB,'kidLen',.2,1,.01,'Длина дочерних');add(fB,'kidThick',.2,.9,.01,'Толщина дочерних');
+fB.add(cfg,'noCross').name('Без пересечений').onChange(onP);
+add(fF,'len',3,20,.1,'Длина основного');add(fF,'curl',0,2,.01,'Изгиб');add(fF,'tropism',-1,1,.01,'Тропизм (вверх / вниз)');
+fF.add(cfg,'seed',1,99999,1).name('Seed').onChange(onP);
+fF.add({a:()=>{cfg.seed=Math.floor(Math.random()*99999);gui.controllersRecursive().forEach(c=>c.updateDisplay());onP()}},'a').name('Новый seed');
+add(fK,'bark',0,1,.01,'Кора');add(fK,'barkSize',.6,2,.01,'Кора: крупность');
+fK.add(cfg,'rootsOn').name('Корни: вкл').onChange(onP);
+fK.add(cfg,'roots',0,100,1).name('Корни: степень (0–100)').onChange(onP);
+fK.add(cfg,'rootSeed',1,99999,1).name('Сид корней (форма профиля)').onChange(onP);
+fK.add({a:()=>{cfg.rootSeed=Math.floor(Math.random()*99999)+1;gui.controllersRecursive().forEach(c=>c.updateDisplay());onP()}},'a').name('Новый сид корней');
+add(fJ,'joint',0,1,.01,'Сглаживание соединений (фаска)');
+const hueC=fC.add(cfg,'hue',0,1,.001).name('Цвет структуры').onChange(onP),baseC=fC.add(cfg,'hueBase',0,1,.001).name('Цвет основания').onChange(onP),tipC=fC.add(cfg,'hueTip',0,1,.001).name('Цвет отростков').onChange(onP);
+spectrum(hueC);spectrum(baseC);spectrum(tipC);
+function syncColorUI(){hueC.show(!cfg.useGrad);baseC.show(cfg.useGrad);tipC.show(cfg.useGrad)}
+fC.add(cfg,'useGrad').name('Использовать градиент').onChange(()=>{syncColorUI();onP()});
+fG.add(cfg,'speed',.1,4,.05).name('Скорость роста');
+fM.add(cfg,'blend',0,.8,.01).name('Плавность слияния');
+fM.add(cfg,'hsm',.03,.4,.005).name('Разрешение сетки, ед.');
+fM.add(cfg,'msm',0,12,1).name('Сглаживание');
+fM.add({a:createMerged},'a').name('▶ Создать единую форму');
+fM.add(cfg,'showMerged').name('Показывать единую форму').onChange(showMergedView);
+fX.add(cfg,'sizeMM',10,1000,1).name('Размер при печати, мм');
+fX.add(cfg,'exportWhat',['Единая форма','Трубки (без слияния)']).name('Что экспортировать');
+fX.add({a:()=>exportModel('stl')},'a').name('💾 Сохранить STL');fX.add({a:()=>exportModel('obj')},'a').name('💾 Сохранить OBJ');
+fC.close();fX.close();fG.close();fJ.open();fK.open();
+if(innerWidth<760)gui.close();
+
+// ===== Запуск =====
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+camera.position.set(11,8,14);controls.target.set(0,4,0);
+loadUser();curUser=-1;syncColorUI();renderUser();updateLabel();regen();syncTransport();
+const hud=document.getElementById('hud');let last=performance.now(),fr=0,ft=0,lastUi=0;
+(function loop(now){requestAnimationFrame(loop);const dt=Math.min(.1,(now-last)/1000);last=now;
+ if(playing&&prog<1&&!meshM){prog=Math.min(1,prog+dt*cfg.speed/10);fillTubes(prog);if(prog>=1)playing=false;if(now-lastUi>120||prog>=1){lastUi=now;syncTransport()}}
+ controls.update();renderer.render(scene,camera);fr++;ft+=dt;
+ if(ft>.5){hud.innerHTML='Отростков: '+B.length+' · Треугольников: '+(iCount/3|0)+' · FPS: '+Math.round(fr/ft)+mergedInfo;fr=0;ft=0}
+})(performance.now());
+</script>
+</body>
+</html>
