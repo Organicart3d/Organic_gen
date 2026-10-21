@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Органическая несущая структура</title>
+<style>
+html,body{margin:0;height:100%;background:#05060a;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+canvas{display:block}
+#hud{position:fixed;left:12px;bottom:calc(10px + env(safe-area-inset-bottom,0px));color:#9fb3c8;font-size:12px;pointer-events:none;line-height:1.55;max-width:min(340px,70vw);background:#0b0e14cc;padding:8px 10px;border-radius:8px;border:1px solid #1d2a40}
+#hud b{color:#cfe0ff}.ok{color:#5fe08a}.bad{color:#ff6b6b}
+#st{position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:none;min-width:240px;max-width:90vw;background:#0b0e14ee;border:1px solid #2b4a7a;border-radius:8px;padding:8px 12px;color:#cfe0ff;font-size:13px;z-index:9}
+#stb{height:5px;background:#1a2438;border-radius:3px;margin-top:6px;overflow:hidden}
+#stf{display:block;height:100%;width:0;background:#3a8bff;transition:width .15s}
+#stf.ind{animation:ind 1s linear infinite}@keyframes ind{from{margin-left:-40%}to{margin-left:100%}}
+.lil-gui .startbtn{height:46px!important;width:100%!important;font-size:15px!important;font-weight:700!important;letter-spacing:.08em;border-radius:6px;background:#162033!important;border:1px solid #2b4a7a!important;color:#9db8e0!important;transition:all .2s}
+.lil-gui .startbtn .name{width:100%!important;text-align:center}
+.lil-gui .startbtn.run{background:#1b66f0!important;color:#fff!important;border-color:#6fb0ff!important;box-shadow:0 0 16px 4px rgba(50,130,255,.85);animation:glow 1.2s ease-in-out infinite}
+@keyframes glow{50%{box-shadow:0 0 6px 1px rgba(50,130,255,.5)}}
+.lil-gui .startc{height:auto!important;margin-top:8px;padding-bottom:4px}
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="st"><div id="stt"></div><div id="stb"><i id="stf"></i></div></div>
+<input type="file" id="f" accept=".obj,.glb,.gltf" hidden>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/dist/lil-gui.umd.min.js"></script>
+<script>
+//#CORE-START
+// ===== Ядро: трёхмерный МКЭ (8-узловые гекса-элементы) + SIMP-оптимизация топологии =====
+// Линейная упругость: K u = f, K = Σ E(ρ)·Ke; E(ρ)=Emin+(1-Emin)ρ³. Решатель: PCG (матрично-свободный, Якоби).
+// Напряжения: σ = D·B·u (в МПа при E в МПа, h в мм, силе в Н), критерий — Мизес.
+const ND=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+const NO=[[0,0,0],[1,0,0],[1,1,0],[0,1,0],[0,0,1],[1,0,1],[1,1,1],[0,1,1]];
+function D0(nu){const a=1/((1+nu)*(1-2*nu)),D=new Float64Array(36);
+ for(let i=0;i<3;i++)for(let j=0;j<3;j++)D[i*6+j]=a*(i===j?1-nu:nu);
+ for(let i=3;i<6;i++)D[i*6+i]=a*(1-2*nu)/2;return D}
+function Bmat(xi,et,ze){const B=new Float64Array(144);
+ for(let a=0;a<8;a++){const[cx,cy,cz]=ND[a],c=3*a,
+  dx=cx*(1+et*cy)*(1+ze*cz)/4,dy=cy*(1+xi*cx)*(1+ze*cz)/4,dz=cz*(1+xi*cx)*(1+et*cy)/4;
+  B[c]=dx;B[24+c+1]=dy;B[48+c+2]=dz;B[72+c]=dy;B[72+c+1]=dx;B[96+c+1]=dz;B[96+c+2]=dy;B[120+c]=dz;B[120+c+2]=dx}
+ return B}
+function makeKe(nu){const D=D0(nu),K=new Float64Array(576),g=1/Math.sqrt(3);
+ for(const xi of[-g,g])for(const et of[-g,g])for(const ze of[-g,g]){const B=Bmat(xi,et,ze),DB=new Float64Array(144);
+  for(let r=0;r<6;r++)for(let c=0;c<24;c++){let s=0;for(let q=0;q<6;q++)s+=D[r*6+q]*B[q*24+c];DB[r*24+c]=s}
+  for(let i=0;i<24;i++)for(let j=0;j<24;j++){let s=0;for(let r=0;r<6;r++)s+=B[r*24+i]*DB[r*24+j];K[i*24+j]+=s*.125}}
+ return K}
+class FEA{
+ constructor(o){Object.assign(this,o);const{nx,ny,nz}=this;
+  this.nel=nx*ny*nz;this.nn=(nx+1)*(ny+1)*(nz+1);this.nd=3*this.nn;
+  this.Ke=makeKe(this.nu);this.D=D0(this.nu);this.Bc=Bmat(0,0,0);
+  this.edof=new Int32Array(this.nel*24);
+  for(let k=0;k<nz;k++)for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){const e=i+nx*(j+ny*k);
+   for(let a=0;a<8;a++){const n=(i+NO[a][0])+(nx+1)*((j+NO[a][1])+(ny+1)*(k+NO[a][2]));for(let d=0;d<3;d++)this.edof[e*24+3*a+d]=3*n+d}}
+  const A=[];for(let e=0;e<this.nel;e++)if(this.act[e])A.push(e);this.A=Int32Array.from(A);
+  this.fixed=new Uint8Array(this.nd).fill(1);this.used=new Uint8Array(this.nn);
+  for(const e of this.A)for(let q=0;q<24;q++){this.fixed[this.edof[e*24+q]]=0;this.used[(this.edof[e*24+q]/3)|0]=1}
+  this.pad=new Uint8Array(this.nel);this.x=new Float64Array(this.nel);this.Ef=new Float64Array(this.nel);
+  for(const k of['u','f','r','z','p','Ap','M','springs'])this[k]=new Float64Array(this.nd)}
+ init(vf){let s=(this.seed>>>0)||1;const rnd=()=>{s=(s+0x6D2B79F5)|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+  const{nx,ny,nz,rmin}=this,rc=Math.ceil(rmin);
+  this.F=Int32Array.from(Array.from(this.A).filter(e=>!this.pad[e]));
+  for(const e of this.A)this.x[e]=this.pad[e]?1:Math.min(1,Math.max(.05,vf*(1+.3*(rnd()-.5))));
+  this.nbI=new Array(this.nel);this.nbW=new Array(this.nel);this.nbS=new Float64Array(this.nel);
+  for(const e of this.A){const i=e%nx,j=((e/nx)|0)%ny,k=(e/(nx*ny))|0,I=[],W=[];let S=0;
+   for(let c=Math.max(0,k-rc);c<=Math.min(nz-1,k+rc);c++)for(let b=Math.max(0,j-rc);b<=Math.min(ny-1,j+rc);b++)for(let a=Math.max(0,i-rc);a<=Math.min(nx-1,i+rc);a++){
+    const q=a+nx*(b+ny*c);if(!this.act[q])continue;const w=rmin-Math.hypot(a-i,b-j,c-k);if(w>0){I.push(q);W.push(w);S+=w}}
+   this.nbI[e]=Int32Array.from(I);this.nbW[e]=Float64Array.from(W);this.nbS[e]=S}}
+ Kmul(x,y){const{A,edof,Ef,Ke,fixed}=this,ue=new Float64Array(24);y.fill(0);
+  for(let n=0;n<A.length;n++){const e=A[n],o=e*24,f=Ef[e];
+   for(let i=0;i<24;i++)ue[i]=x[edof[o+i]];
+   for(let i=0;i<24;i++){let s=0;const r=i*24;for(let j=0;j<24;j++)s+=Ke[r+j]*ue[j];y[edof[o+i]]+=f*s}}
+  for(let d=0;d<y.length;d++){if(this.springs[d])y[d]+=this.springs[d]*x[d];if(fixed[d])y[d]=0}}
+ async solve(maxIt=150,tol=1e-4){const{u,f,r,z,p,Ap,M,fixed,nd,A,edof,Ef,Ke}=this;
+  M.fill(0);for(const e of A)for(let i=0;i<24;i++)M[edof[e*24+i]]+=Ef[e]*Ke[i*25];
+  for(let d=0;d<nd;d++)M[d]+=this.springs[d];
+  for(let d=0;d<nd;d++)if(fixed[d]||M[d]<=0)M[d]=1;
+  this.Kmul(u,Ap);let fn=0,rz=0;
+  for(let d=0;d<nd;d++){r[d]=fixed[d]?0:f[d]-Ap[d];fn+=f[d]*f[d]}fn=Math.sqrt(fn)||1;
+  for(let d=0;d<nd;d++){z[d]=r[d]/M[d];p[d]=z[d];rz+=r[d]*z[d]}
+  let t0=performance.now(),it=0;
+  for(;it<maxIt;it++){this.Kmul(p,Ap);let pa=0;for(let d=0;d<nd;d++)pa+=p[d]*Ap[d];if(!(pa>0))break;
+   const al=rz/pa;let rn=0;for(let d=0;d<nd;d++){u[d]+=al*p[d];r[d]-=al*Ap[d];rn+=r[d]*r[d]}
+   if(Math.sqrt(rn)<tol*fn)break;
+   let rzn=0;for(let d=0;d<nd;d++){z[d]=r[d]/M[d];rzn+=r[d]*z[d]}
+   const be=rzn/rz;rz=rzn;for(let d=0;d<nd;d++)p[d]=z[d]+be*p[d];
+   if(performance.now()-t0>30){await new Promise(q=>setTimeout(q));t0=performance.now()}}
+  return it}
+ async iterate(vfT){const{A,edof,Ke,x,Ef,u,D,Bc,h,nel}=this,Emin=1e-3;
+  for(const e of A)Ef[e]=Emin+(1-Emin)*x[e]*x[e]*x[e];
+  const its=await this.solve(),ue=new Float64Array(24),dc=new Float64Array(nel),vm=new Float32Array(nel),eps=new Float64Array(6),sg=new Float64Array(6);let C=0;
+  for(const e of A){const o=e*24;for(let i=0;i<24;i++)ue[i]=u[edof[o+i]];
+   let ce=0;for(let i=0;i<24;i++){let s=0;for(let j=0;j<24;j++)s+=Ke[i*24+j]*ue[j];ce+=ue[i]*s}
+   C+=Ef[e]*ce;dc[e]=-3*(1-Emin)*x[e]*x[e]*ce;
+   for(let r=0;r<6;r++){let s=0;for(let c=0;c<24;c++)s+=Bc[r*24+c]*ue[c];eps[r]=s}
+   for(let r=0;r<6;r++){let s=0;for(let q=0;q<6;q++)s+=D[r*6+q]*eps[q];sg[r]=s/(h*h)}
+   vm[e]=Math.sqrt(.5*((sg[0]-sg[1])**2+(sg[1]-sg[2])**2+(sg[2]-sg[0])**2)+3*(sg[3]**2+sg[4]**2+sg[5]**2))}
+  const arr=[];for(const e of A)if(x[e]>.5)arr.push(vm[e]);arr.sort((a,b)=>a-b);
+  const s95=arr.length?arr[Math.floor(.95*(arr.length-1))]:0,smax=arr.length?arr[arr.length-1]:0;
+  const dcf=new Float64Array(nel);let sc=1e-30;
+  for(const e of A){let s=0;const nI=this.nbI[e],nW=this.nbW[e];for(let q=0;q<nI.length;q++)s+=nW[q]*x[nI[q]]*dc[nI[q]];dcf[e]=s/(Math.max(x[e],1e-3)*this.nbS[e]);sc=Math.max(sc,Math.abs(dcf[e]))}
+  const F=this.F,target=Math.max(0,vfT*A.length-(A.length-F.length)),xn=new Float64Array(nel);let l1=0,l2=1e9,n=0;
+  while(l2-l1>1e-6*(l1+l2)&&n++<90){const lm=.5*(l1+l2);let sum=0;
+   for(const e of F){const xo=x[e],v=xo*Math.sqrt(Math.max(0,-dcf[e]/sc)/lm);xn[e]=Math.max(.001,Math.max(xo-.2,Math.min(1,Math.min(xo+.2,v))));sum+=xn[e]}
+   if(sum>target)l1=lm;else l2=lm}
+  for(const e of F)x[e]=xn[e];
+  return{C,vm,its,s95,smax}}
+ maxDisp(E){let m=0;for(let n=0;n<this.nn;n++)if(this.used[n])m=Math.max(m,Math.hypot(this.u[3*n],this.u[3*n+1],this.u[3*n+2]));return m/(E*this.h)}
+}
+// Воксельная оценка «внутри/снаружи» модели: чётность пересечений луча вдоль X с треугольниками
+function voxelize(T,o,h,nx,ny,nz){const ins=new Uint8Array(nx*ny*nz),nt=T.length/9,bins=new Array(ny*nz);
+ for(let t=0;t<nt;t++){const b=t*9,y0=Math.min(T[b+1],T[b+4],T[b+7]),y1=Math.max(T[b+1],T[b+4],T[b+7]),z0=Math.min(T[b+2],T[b+5],T[b+8]),z1=Math.max(T[b+2],T[b+5],T[b+8]),
+   j0=Math.max(0,Math.floor((y0-o.y)/h-.5)-1),j1=Math.min(ny-1,Math.ceil((y1-o.y)/h-.5)+1),k0=Math.max(0,Math.floor((z0-o.z)/h-.5)-1),k1=Math.min(nz-1,Math.ceil((z1-o.z)/h-.5)+1);
+  for(let k=k0;k<=k1;k++)for(let j=j0;j<=j1;j++)(bins[j+ny*k]||(bins[j+ny*k]=[])).push(t)}
+ for(let k=0;k<nz;k++)for(let j=0;j<ny;j++){const L=bins[j+ny*k];if(!L)continue;const y=o.y+(j+.5)*h+1.3e-4*h,z=o.z+(k+.5)*h+.7e-4*h,xs=[];
+  for(const t of L){const b=t*9,ay=T[b+1],by=T[b+4],cy=T[b+7],az=T[b+2],bz=T[b+5],cz=T[b+8],d=(by-ay)*(cz-az)-(cy-ay)*(bz-az);if(Math.abs(d)<1e-12)continue;
+   const u=((y-ay)*(cz-az)-(cy-ay)*(z-az))/d,v=((by-ay)*(z-az)-(y-ay)*(bz-az))/d;
+   if(u>=0&&v>=0&&u+v<=1)xs.push(T[b]+u*(T[b+3]-T[b])+v*(T[b+6]-T[b]))}
+  xs.sort((a,b)=>a-b);
+  for(let q=0;q+1<xs.length;q+=2){const i0=Math.max(0,Math.ceil((xs[q]-o.x)/h-.5)),i1=Math.min(nx-1,Math.floor((xs[q+1]-o.x)/h-.5));for(let i=i0;i<=i1;i++)ins[i+nx*(j+ny*k)]=1}}
+ return ins}
+
+// ===== Меш для печати: поле плотности → единая замкнутая поверхность (Surface Nets) =====
+function buildField(fea,s,xs){const{nx,ny,nz}=fea,x=xs||fea.x,X=nx*s+2,Y=ny*s+2,Z=nz*s+2,S=new Float32Array(X*Y*Z),
+  at=(i,j,k)=>x[Math.min(nx-1,Math.max(0,i))+nx*(Math.min(ny-1,Math.max(0,j))+ny*Math.min(nz-1,Math.max(0,k)))];
+ for(let c=0;c<Z-2;c++){const w=(c+.5)/s-.5,k0=Math.floor(w),fz=w-k0;
+  for(let b=0;b<Y-2;b++){const v=(b+.5)/s-.5,j0=Math.floor(v),fy=v-j0;
+   for(let a=0;a<X-2;a++){const u=(a+.5)/s-.5,i0=Math.floor(u),fx=u-i0;let r=0;
+    for(let dz=0;dz<2;dz++)for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++)r+=at(i0+dx,j0+dy,k0+dz)*(dx?fx:1-fx)*(dy?fy:1-fy)*(dz?fz:1-fz);
+    S[(a+1)+X*((b+1)+Y*(c+1))]=r}}}
+ return{S,X,Y,Z}}
+function fixChecker(S0,X,Y,Z,thr){ // убираем «шахматные» грани 2×2: из-за них рёбра меша становятся неманифольдными
+ const S=S0.slice(),e=thr+1e-3;let ch=1;
+ for(let pass=0;pass<8&&ch;pass++){ch=0;
+  for(const[a,b]of[[[1,0,0],[0,1,0]],[[0,1,0],[0,0,1]],[[1,0,0],[0,0,1]]])
+   for(let k=0;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=0;i<X-1;i++){
+    const i1=i+a[0],j1=j+a[1],k1=k+a[2],i2=i+b[0],j2=j+b[1],k2=k+b[2],i3=i1+b[0],j3=j1+b[1],k3=k1+b[2];if(i3>=X||j3>=Y||k3>=Z)continue;
+    const p=i+X*(j+Y*k),q=i1+X*(j1+Y*k1),r=i2+X*(j2+Y*k2),t=i3+X*(j3+Y*k3),A=S[p]>thr,B=S[q]>thr,C=S[r]>thr,D=S[t]>thr;
+    if(A&&D&&!B&&!C){S[S[q]>=S[r]?q:r]=e;ch++}else if(B&&C&&!A&&!D){S[S[p]>=S[t]?p:t]=e;ch++}}}
+ return S}
+function surfaceNets(S,X,Y,Z,thr,hs,ox,oy,oz){S=fixChecker(S,X,Y,Z,thr);const cid=new Int32Array((X-1)*(Y-1)*(Z-1)).fill(-1),V=[],I=[],
+  E=[[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]],val=new Float32Array(8);
+ for(let k=0;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=0;i<X-1;i++){let m=0;
+  for(let c=0;c<8;c++){val[c]=S[(i+(c&1))+X*((j+((c>>1)&1))+Y*(k+(c>>2)))];if(val[c]>thr)m|=1<<c}
+  if(m===0||m===255)continue;let cx=0,cy=0,cz=0,n=0;
+  for(const[a,b]of E){const va=val[a],vb=val[b];if((va>thr)!==(vb>thr)){const t=(thr-va)/(vb-va),ax=a&1,ay=(a>>1)&1,az=a>>2;
+   cx+=ax+t*((b&1)-ax);cy+=ay+t*(((b>>1)&1)-ay);cz+=az+t*((b>>2)-az);n++}}
+  cid[i+(X-1)*(j+(Y-1)*k)]=V.length/3;V.push(ox+(i-1+.5+cx/n)*hs,oy+(j-1+.5+cy/n)*hs,oz+(k-1+.5+cz/n)*hs)}
+ const C=(i,j,k)=>cid[i+(X-1)*(j+(Y-1)*k)],q=(a,b,c,d,fl)=>{if(a<0||b<0||c<0||d<0)return;if(fl)I.push(a,c,b,a,d,c);else I.push(a,b,c,a,c,d)},P=(i,j,k)=>S[i+X*(j+Y*k)];
+ for(let k=1;k<Z-1;k++)for(let j=1;j<Y-1;j++)for(let i=0;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i+1,j,k)>thr;if(a!==b)q(C(i,j-1,k-1),C(i,j,k-1),C(i,j,k),C(i,j-1,k),!a)}
+ for(let k=1;k<Z-1;k++)for(let j=0;j<Y-1;j++)for(let i=1;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i,j+1,k)>thr;if(a!==b)q(C(i-1,j,k-1),C(i-1,j,k),C(i,j,k),C(i,j,k-1),!a)}
+ for(let k=0;k<Z-1;k++)for(let j=1;j<Y-1;j++)for(let i=1;i<X-1;i++){const a=P(i,j,k)>thr,b=P(i,j,k+1)>thr;if(a!==b)q(C(i-1,j-1,k),C(i,j-1,k),C(i,j,k),C(i-1,j,k),!a)}
+ return{V:Float32Array.from(V),I:Uint32Array.from(I)}}
+function keepLargest(V,I){const nv=V.length/3,par=new Int32Array(nv).map((_,i)=>i),f=a=>{while(par[a]!==a){par[a]=par[par[a]];a=par[a]}return a};
+ for(let t=0;t<I.length;t+=3){par[f(I[t])]=f(I[t+1]);par[f(I[t+1])]=f(I[t+2])}
+ const cnt=new Map();for(let t=0;t<I.length;t+=3){const r=f(I[t]);cnt.set(r,(cnt.get(r)||0)+1)}
+ let bc=0;for(const[,c]of cnt)bc=Math.max(bc,c);const keep=new Set();for(const[r,c]of cnt)if(c>=.05*bc)keep.add(r); // убираем только мелкие плавающие обломки
+ const map=new Int32Array(nv).fill(-1),nV=[],nI=[];
+ for(let t=0;t<I.length;t+=3){if(!keep.has(f(I[t])))continue;for(let q=0;q<3;q++){const v=I[t+q];if(map[v]<0){map[v]=nV.length/3;nV.push(V[3*v],V[3*v+1],V[3*v+2])}nI.push(map[v])}}
+ return{V:Float32Array.from(nV),I:Uint32Array.from(nI),removed:cnt.size-keep.size,parts:keep.size}}
+function taubin(V,I,n){if(!n)return;const nv=V.length/3,es=new Set();
+ for(let t=0;t<I.length;t+=3)for(let q=0;q<3;q++){const a=I[t+q],b=I[t+(q+1)%3];es.add(a<b?a*nv+b:b*nv+a)}
+ const deg=new Int32Array(nv+1);for(const e of es){deg[(e/nv|0)+1]++;deg[e%nv+1]++}for(let i=0;i<nv;i++)deg[i+1]+=deg[i];
+ const pos=deg.slice(0,nv),nb=new Int32Array(deg[nv]);for(const e of es){const a=e/nv|0,b=e%nv;nb[pos[a]++]=b;nb[pos[b]++]=a}
+ const T=new Float32Array(V.length),pass=l=>{for(let v=0;v<nv;v++){const s=deg[v],e=deg[v+1];if(e===s){T[3*v]=V[3*v];T[3*v+1]=V[3*v+1];T[3*v+2]=V[3*v+2];continue}
+   let x=0,y=0,z=0;for(let q=s;q<e;q++){x+=V[3*nb[q]];y+=V[3*nb[q]+1];z+=V[3*nb[q]+2]}const c=e-s;
+   T[3*v]=V[3*v]+l*(x/c-V[3*v]);T[3*v+1]=V[3*v+1]+l*(y/c-V[3*v+1]);T[3*v+2]=V[3*v+2]+l*(z/c-V[3*v+2])}V.set(T)};
+ for(let it=0;it<n;it++){pass(.5);pass(-.53)}}
+function meshVol(V,I){let v=0;for(let t=0;t<I.length;t+=3){const a=I[t],b=I[t+1],c=I[t+2];
+  v+=(V[3*a]*(V[3*b+1]*V[3*c+2]-V[3*b+2]*V[3*c+1])-V[3*a+1]*(V[3*b]*V[3*c+2]-V[3*b+2]*V[3*c])+V[3*a+2]*(V[3*b]*V[3*c+1]-V[3*b+1]*V[3*c]))/6}return v}
+function analyzeMesh(V,I){let vol=0;const nv=V.length/3,dir=new Map();
+ for(let t=0;t<I.length;t+=3){const a=I[t],b=I[t+1],c=I[t+2];
+  vol+=(V[3*a]*(V[3*b+1]*V[3*c+2]-V[3*b+2]*V[3*c+1])-V[3*a+1]*(V[3*b]*V[3*c+2]-V[3*b+2]*V[3*c])+V[3*a+2]*(V[3*b]*V[3*c+1]-V[3*b+1]*V[3*c]))/6;
+  for(let q=0;q<3;q++){const k=I[t+q]*nv+I[t+(q+1)%3];dir.set(k,(dir.get(k)||0)+1)}}
+ let bad=0;for(const[k,c]of dir){const a=k/nv|0,b=k%nv;if(c!==1||dir.get(b*nv+a)!==1)bad++}
+ return{vol,bad,tris:I.length/3}}
+
+// Продлеваем плотность за границу области на 2 слоя (потом обрезаем точной формой модели)
+function extendX(fea,L){const{nx,ny,nz,act}=fea;let xe=Float32Array.from(fea.x),val=Uint8Array.from(act);
+ for(let l=0;l<L;l++){const nx2=xe.slice(),nv=val.slice();
+  for(let k=0;k<nz;k++)for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){const e=i+nx*(j+ny*k);if(val[e])continue;let sm=0,c=0;
+   for(const[di,dj,dk]of[[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,-1],[0,0,1]]){const a=i+di,b=j+dj,q=k+dk;if(a<0||b<0||q<0||a>=nx||b>=ny||q>=nz)continue;const n=a+nx*(b+ny*q);if(val[n]){sm+=xe[n];c++}}
+   if(c){nx2[e]=sm/c;nv[e]=1}}
+  xe=nx2;val=nv}
+ return xe}
+function blur3(A,nx,ny,nz){const B=new Float32Array(A.length);
+ for(let ax=0;ax<3;ax++){const st=[1,nx,nx*ny][ax],n=[nx,ny,nz][ax];
+  for(let i=0;i<A.length;i++){const c=[i%nx,((i/nx)|0)%ny,(i/(nx*ny))|0][ax];B[i]=(A[c>0?i-st:i]+A[i]+A[c<n-1?i+st:i])/3}A.set(B)}}
+// Гладкая маска исходной модели на мелкой сетке (внутри/снаружи) в формате поля с нулевой рамкой
+function maskField(T,o,hs,nxf,nyf,nzf,inside){const ins=voxelize(T,o,hs,nxf,nyf,nzf),M=new Float32Array(nxf*nyf*nzf);
+ for(let i=0;i<M.length;i++)M[i]=ins[i];blur3(M,nxf,nyf,nzf);
+ const X=nxf+2,Y=nyf+2,Z=nzf+2,R=new Float32Array(X*Y*Z);
+ for(let k=0;k<nzf;k++)for(let j=0;j<nyf;j++)for(let i=0;i<nxf;i++){const v=M[i+nxf*(j+nyf*k)];R[(i+1)+X*((j+1)+Y*(k+1))]=inside?v:1-v}
+ return R}
+//#CORE-END
+
+// ===== Материалы (типовые справочные значения; σ — расчётная прочность, МПа) =====
+const MAT={
+ 'Полиуретан':{E:2000,nu:.4,s:40,rho:1100},
+ 'Эпоксидная смола':{E:3000,nu:.35,s:60,rho:1200},
+ 'УФ смола (3D-печать)':{E:2500,nu:.38,s:50,rho:1150},
+ 'Филамент PLA (3D-печать)':{E:3500,nu:.36,s:45,rho:1240},
+ 'Гипс':{E:4000,nu:.25,s:3,rho:1500,br:1},
+ 'Сталь':{E:200000,nu:.3,s:250,rho:7850},
+ 'Медь (отожжённая)':{E:120000,nu:.34,s:70,rho:8960},
+ 'Бронза':{E:105000,nu:.34,s:150,rho:8800},
+ 'Бетон (без арматуры)':{E:30000,nu:.2,s:3,rho:2400,br:1}
+};
+const SH=['Куб','Сфера','Пирамида','Капсула','Октаэдр'],MESHN='Меш (для печати)';
+let meshObj=null,MESHR=null,mtok=0;const HS={it:0,vf:.45};
+const cfg={src:'Параллелепипед',fill:'Внутри',L:120,W:30,H:20,load:'Сгибание',F:200,SF:2,padR:1.5,mat:'Сталь',
+ shape:'Смешанные',msub:2,msm:6,mkeep:true,mcol:true,mcal:true,vmin:.12,res:28,thr:.5,rmin:1.5,vf:.45,auto:true,iters:70,seed:3,rpts:false};
+const V3=THREE.Vector3;
+const DEFAULT=JSON.parse(JSON.stringify(cfg)),pts={mounts:[],loads:[],supports:[]},MODEL={T:null,size:null};
+let fea=null,last=null,running=false,stopReq=false,picking=null,mountCtl,loadCtl,supCtl,startBtn,gd=null,pickMesh=null,mk=new THREE.Group(),ms=[],down=null,DM=null;
+
+// ===== Сцена =====
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x05060a);scene.add(mk);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,1,5000),controls=new THREE.OrbitControls(camera,renderer.domElement);controls.enableDamping=true;
+scene.add(new THREE.HemisphereLight(0xaabbdd,0x181820,.7));const sun=new THREE.DirectionalLight(0xffffff,1.1);sun.position.set(1,2,1.5);scene.add(sun);
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+
+// ===== Статус-бар и сохранение =====
+let stT,busy=false;const tk=()=>new Promise(r=>setTimeout(r,0));
+function status(t,p,hide){const s=document.getElementById('st'),f=document.getElementById('stf');clearTimeout(stT);s.style.display='block';
+ document.getElementById('stt').textContent=t;f.style.width=(p==null?40:p)+'%';f.className=p==null?'ind':'';if(hide)stT=setTimeout(()=>s.style.display='none',4000)}
+let DLp=null;function getDL(){if(DLp)return DLp;if(!(window.claude&&window.claude.use))return Promise.resolve(null);return DLp=window.claude.use('downloads').catch(()=>null)}getDL();
+function fallbackSave(name,data){const real=name.replace(/\.(obj|stl)\.txt$/,'.$1'),url=URL.createObjectURL(data instanceof Blob?data:new Blob([data]));status('',100);
+ document.getElementById('stt').innerHTML='<span onclick="this.parentNode.parentNode.style.display=\'none\'" style="cursor:pointer;float:right;margin-left:12px">✕</span>Файл готов: <a download="'+real+'" href="'+url+'" style="color:#7db4ff">Скачать '+real+'</a>'}
+async function saveFile(name,data){status('Ожидание подтверждения сохранения…',null);
+ try{const d=await getDL();if(!d){fallbackSave(name,data);return}await d.save({filename:name,data});status('Сохранено: '+name+' ✓',100,true)}
+ catch(e){const c=e&&e.code;status(c==='declined'?'Сохранение отменено':'Ошибка сохранения'+(c?' ('+c+')':''),100,true)}}
+async function objPart(m,out,off,tot,base){const geo=m.geometry,pos=geo.attributes.position,idx=geo.index,mt=new THREE.Matrix4(),v=new THREE.Vector3();
+ for(let i=0;i<m.count;i++){if(i%150===0){status('Сборка модели…',Math.round((base+i)/tot*85));await tk()}
+  m.getMatrixAt(i,mt);for(let k=0;k<pos.count;k++){v.fromBufferAttribute(pos,k).applyMatrix4(mt);out.push('v '+v.x.toFixed(3)+' '+v.y.toFixed(3)+' '+v.z.toFixed(3))}
+  const nf=idx?idx.count:pos.count;for(let k=0;k<nf;k+=3)out.push('f '+((idx?idx.getX(k):k)+off)+' '+((idx?idx.getX(k+1):k+1)+off)+' '+((idx?idx.getX(k+2):k+2)+off));off+=pos.count}
+ return off}
+async function exportOBJ(){if(MESHR&&cfg.shape===MESHN){if(busy)return;busy=true;try{const{V,I}=MESHR,out=['# Printable mesh (mm)','o structure'];
+  for(let i=0;i<V.length;i+=3)out.push('v '+V[i].toFixed(3)+' '+V[i+1].toFixed(3)+' '+V[i+2].toFixed(3));
+  for(let i=0;i<I.length;i+=3)out.push('f '+(I[i]+1)+' '+(I[i+1]+1)+' '+(I[i+2]+1));await saveFile('structure.obj.txt',new Blob([out.join('\n')]))}finally{busy=false}return}
+ if(busy||!ms.length)return status('Сначала запустите расчёт',100,true);busy=true;
+ try{const parts=ms.filter(m=>m.count>0),tot=parts.reduce((a,m)=>a+m.count,0),out=['# Load-bearing organic structure (mm)','o structure'];let off=1,base=0;
+  for(const m of parts){off=await objPart(m,out,off,tot,base);base+=m.count}
+  status('Подготовка файла…',90);await tk();await saveFile('structure.obj.txt',new Blob([out.join('\n')]))}finally{busy=false}}
+
+async function exportSTL(){if(!MESHR||cfg.shape!==MESHN)return status('Выберите «Элементы / меш → Меш (для печати)» и дождитесь построения',100,true);
+ if(busy)return;busy=true;try{const{V,I}=MESHR,nt=I.length/3,buf=new ArrayBuffer(84+nt*50),dv=new DataView(buf);status('Подготовка STL…',50);await tk();dv.setUint32(80,nt,true);
+  for(let t=0;t<nt;t++){const a=I[3*t],b=I[3*t+1],c=I[3*t+2],o=84+t*50,ux=V[3*b]-V[3*a],uy=V[3*b+1]-V[3*a+1],uz=V[3*b+2]-V[3*a+2],vx=V[3*c]-V[3*a],vy=V[3*c+1]-V[3*a+1],vz=V[3*c+2]-V[3*a+2];
+   let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;const l=Math.hypot(nx,ny,nz)||1;nx/=l;ny/=l;nz/=l;[nx,ny,nz].forEach((q,i)=>dv.setFloat32(o+4*i,q,true));
+   [a,b,c].forEach((v,k)=>{for(let d=0;d<3;d++)dv.setFloat32(o+12+12*k+4*d,V[3*v+d],true)})}
+  await saveFile('structure.stl.txt',new Blob([buf]))}finally{busy=false}}
+async function resetAll(){stopReq=true;while(running)await tk();picking=null;Object.assign(cfg,DEFAULT);MODEL.T=null;MODEL.size=null;fi.value='';
+ mountCtl.name('1. Задать точки крепления');loadCtl.name('2. Задать точки упора (нагрузки)');supCtl.name('3. Задать опору снизу');
+ g.controllersRecursive().forEach(c=>c.updateDisplay());refreshDomain();status('Параметры и модель сброшены',100,true)}
+// ===== Область, модель, точки =====
+function makeGeo(n){if(n==='Сфера')return new THREE.IcosahedronGeometry(.62,1);if(n==='Пирамида')return new THREE.ConeGeometry(.8,1,4).rotateY(Math.PI/4);
+ if(n==='Октаэдр')return new THREE.OctahedronGeometry(.75);
+ if(n==='Капсула'){const p=[],r=.32,hh=.2;for(let i=0;i<=6;i++){const a=-Math.PI/2+i*Math.PI/12;p.push(new THREE.Vector2(Math.max(0,Math.cos(a)*r),-hh+Math.sin(a)*r))}
+  for(let i=0;i<=6;i++){const a=i*Math.PI/12;p.push(new THREE.Vector2(Math.max(0,Math.cos(a)*r),hh+Math.sin(a)*r))}return new THREE.LatheGeometry(p,10)}
+ return new THREE.BoxGeometry(1,1,1)}
+function domainBox(){if(cfg.src==='Своя модель'&&MODEL.T){const s=cfg.L/Math.max(MODEL.size.x,MODEL.size.y,MODEL.size.z),mn=new V3(),mx=MODEL.size.clone().multiplyScalar(s);
+  if(cfg.fill==='Снаружи'){const p=mx.clone().multiplyScalar(.25);mn.sub(p);mx.add(p)}return{mn,mx,s,model:true}}
+ return{mn:new V3(),mx:new V3(cfg.L,cfg.H,cfg.W),s:1,model:false}}
+function clearResult(){mtok++;for(const m of ms){scene.remove(m);m.geometry.dispose()}ms=[];fea=null;last=null;clearMeshView()}
+function refreshDomain(){if(running)return;clearResult();pts.mounts=[];pts.loads=[];pts.supports=[];if(gd)scene.remove(gd);gd=new THREE.Group();scene.add(gd);
+ const dm=DM=domainBox(),sz=dm.mx.clone().sub(dm.mn),ctr=dm.mn.clone().add(dm.mx).multiplyScalar(.5),mat=new THREE.MeshBasicMaterial({color:0x4a6a9a,transparent:true,opacity:.25,side:THREE.DoubleSide,depthWrite:false});
+ if(dm.model){const P=MODEL.T,pos=new Float32Array(P.length);for(let i=0;i<P.length;i++)pos[i]=P[i]*dm.s;const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  pickMesh=new THREE.Mesh(g,mat);gd.add(pickMesh);if(cfg.fill==='Снаружи')gd.add(new THREE.Box3Helper(new THREE.Box3(dm.mn,dm.mx),0x335577))}
+ else{pickMesh=new THREE.Mesh(new THREE.BoxGeometry(sz.x,sz.y,sz.z),mat);pickMesh.position.copy(ctr);gd.add(pickMesh);
+  const ed=new THREE.LineSegments(new THREE.EdgesGeometry(pickMesh.geometry),new THREE.LineBasicMaterial({color:0x5a7aaa}));ed.position.copy(ctr);gd.add(ed)}
+ const D=Math.max(sz.x,sz.y,sz.z);controls.target.copy(ctr);camera.position.copy(ctr).add(new V3(.9,.7,1.3).multiplyScalar(D*1.1));camera.near=D*.01;camera.far=D*30;camera.updateProjectionMatrix();
+ refreshMarkers();hud()}
+function avg(a){const c=new V3();a.forEach(p=>c.add(p));return c.multiplyScalar(1/a.length)}
+function loadDir(lp,mc){const d=lp.clone().sub(mc);if(d.length()<1e-6)d.set(1,0,0);d.normalize();
+ if(cfg.load==='Растяжение')return d;if(cfg.load==='Сжатие')return d.negate();
+ const t=new V3(0,-1,0);t.addScaledVector(d,-t.dot(d));if(t.length()<.2){t.set(0,0,-1);t.addScaledVector(d,-t.dot(d))}return t.normalize()}
+function refreshMarkers(){scene.remove(mk);mk=new THREE.Group();scene.add(mk);const dm=DM||domainBox(),R=Math.max(...dm.mx.clone().sub(dm.mn).toArray())*.012,mc=(pts.mounts.length+pts.supports.length)?avg(pts.mounts.concat(pts.supports)):null;
+ pts.mounts.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(R,12,8),new THREE.MeshBasicMaterial({color:0x22d3ee}));m.position.copy(p);mk.add(m)});
+ pts.supports.forEach(p=>{const m=new THREE.Mesh(new THREE.BoxGeometry(R*1.8,R*1.8,R*1.8),new THREE.MeshBasicMaterial({color:0x4ade80}));m.position.copy(p);mk.add(m)});
+ pts.loads.forEach(p=>{const m=new THREE.Mesh(new THREE.SphereGeometry(R,12,8),new THREE.MeshBasicMaterial({color:0xffa040}));m.position.copy(p);mk.add(m);
+  if(mc){const d=loadDir(p,mc),L=R*14;mk.add(new THREE.ArrowHelper(d,p.clone().addScaledVector(d,-L),L,0xffa040,R*5,R*3))}})}
+function togglePick(k){picking=picking===k?null:k;mountCtl.name(picking==='mount'?'1. Крепление: кликайте (ещё раз — готово)':'1. Задать точки крепления');
+ loadCtl.name(picking==='load'?'2. Упор: кликайте (ещё раз — готово)':'2. Задать точки упора (нагрузки)');
+ supCtl.name(picking==='support'?'3. Опора: кликайте (ещё раз — готово)':'3. Задать опору снизу')}
+function clearPts(){pts.mounts=[];pts.loads=[];pts.supports=[];cfg.rpts=false;refreshMarkers()}
+renderer.domElement.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY]});
+renderer.domElement.addEventListener('pointerup',e=>{if(!picking||!down||!pickMesh||running||Math.hypot(e.clientX-down[0],e.clientY-down[1])>5)return;
+ const r=new THREE.Raycaster();r.setFromCamera(new THREE.Vector2(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1),camera);const h=r.intersectObject(pickMesh)[0];
+ if(h){const a=pts[picking+'s'];if(a.length<6)a.push(h.point.clone());refreshMarkers()}});
+function loadModel(file){const ext=file.name.split('.').pop().toLowerCase(),rd=new FileReader();
+ const done=obj=>{const P=[];obj.updateMatrixWorld(true);
+  obj.traverse(o=>{if(!o.isMesh)return;const p=o.geometry.attributes.position,ix=o.geometry.index,v=i=>new V3().fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld),n=ix?ix.count:p.count;
+   for(let k=0;k+2<n;k+=3)P.push(v(ix?ix.getX(k):k),v(ix?ix.getX(k+1):k+1),v(ix?ix.getX(k+2):k+2))});
+  if(!P.length)return status('В файле нет геометрии',100,true);
+  const bb=new THREE.Box3().setFromPoints(P),T=new Float32Array(P.length*3);P.forEach((q,i)=>{T[i*3]=q.x-bb.min.x;T[i*3+1]=q.y-bb.min.y;T[i*3+2]=q.z-bb.min.z});
+  MODEL.T=T;MODEL.size=bb.getSize(new V3());cfg.src='Своя модель';g.controllersRecursive().forEach(c=>c.updateDisplay());refreshDomain();status('Модель загружена: '+(P.length/3)+' треугольников',100,true)};
+ rd.onload=()=>{try{ext==='obj'?done(new THREE.OBJLoader().parse(rd.result)):new THREE.GLTFLoader().parse(rd.result,'',x=>done(x.scene),()=>{})}catch(e){status('Не удалось прочитать модель',100,true)}};
+ ext==='obj'?rd.readAsText(file):rd.readAsArrayBuffer(file)}
+
+// ===== Подготовка расчёта =====
+function setup(){const dm=DM=domainBox(),ex=dm.mx.clone().sub(dm.mn),h=Math.max(ex.x,ex.y,ex.z)/cfg.res,
+  nx=Math.max(2,Math.ceil(ex.x/h-1e-6)),ny=Math.max(2,Math.ceil(ex.y/h-1e-6)),nz=Math.max(2,Math.ceil(ex.z/h-1e-6)),mt=MAT[cfg.mat];
+ let act=new Uint8Array(nx*ny*nz).fill(1);
+ if(dm.model){const T=new Float32Array(MODEL.T.length);for(let i=0;i<T.length;i++)T[i]=MODEL.T[i]*dm.s;
+  const ins=voxelize(T,dm.mn,h,nx,ny,nz);for(let e=0;e<act.length;e++)act[e]=cfg.fill==='Внутри'?ins[e]:1-ins[e]}
+ fea=new FEA({nx,ny,nz,h,act,nu:mt.nu,rmin:cfg.rmin,seed:cfg.seed});
+ if(fea.A.length<10)throw new Error('Область пуста: проверьте модель и режим «Внутри/Снаружи»');
+ const o=dm.mn,cen=e=>new V3(o.x+((e%nx)+.5)*h,o.y+(((e/nx)|0)%ny+.5)*h,o.z+(((e/(nx*ny))|0)+.5)*h);
+ if(!(pts.mounts.length+pts.supports.length)||!pts.loads.length){ // авто-точки по длинной оси
+  const ax=[nx,ny,nz].indexOf(Math.max(nx,ny,nz)),co=e=>[e%nx,((e/nx)|0)%ny,(e/(nx*ny))|0][ax];let cmin=1e9,cmax=-1;
+  for(const e of fea.A){cmin=Math.min(cmin,co(e));cmax=Math.max(cmax,co(e))}
+  const lim=Math.max(1,Math.round((cmax-cmin)*.1));let s=(cfg.seed*9301+49297)%233280;const rn=()=>(s=(s*9301+49297)%233280)/233280;
+  const pick=(f)=>{const L=Array.from(fea.A).filter(f);if(!L.length)return null;if(cfg.rpts)return cen(L[Math.floor(rn()*L.length)]);
+   const c=avg(L.map(cen));return L.map(cen).sort((a,b)=>a.distanceTo(c)-b.distanceTo(c))[0]};
+  if(!pts.mounts.length&&!pts.supports.length){const p=pick(e=>co(e)<=cmin+lim);if(p)pts.mounts.push(p)}
+  if(!pts.loads.length){const p=pick(e=>co(e)>=cmax-lim);if(p)pts.loads.push(p)}}
+ const R=cfg.padR*h,nodeOf=(i,j,k)=>i+(nx+1)*(j+(ny+1)*k),mc=avg(pts.mounts.concat(pts.supports));
+ const near=p=>{let res=[],best=-1,bd=1e9;const ci=Math.round((p.x-o.x)/h),cj=Math.round((p.y-o.y)/h),ck=Math.round((p.z-o.z)/h),r=Math.ceil(R/h)+3;
+  for(let k=Math.max(0,ck-r);k<=Math.min(nz,ck+r);k++)for(let j=Math.max(0,cj-r);j<=Math.min(ny,cj+r);j++)for(let i=Math.max(0,ci-r);i<=Math.min(nx,ci+r);i++){
+   const n=nodeOf(i,j,k);if(!fea.used[n])continue;const d=Math.hypot(o.x+i*h-p.x,o.y+j*h-p.y,o.z+k*h-p.z);if(d<=R+1e-6)res.push(n);if(d<bd){bd=d;best=n}}
+  return res.length?res:(best>=0?[best]:[])};
+ const padAt=p=>{const ci=Math.floor((p.x-o.x)/h),cj=Math.floor((p.y-o.y)/h),ck=Math.floor((p.z-o.z)/h),r=Math.ceil(R/h)+2;
+  for(let k=Math.max(0,ck-r);k<=Math.min(nz-1,ck+r);k++)for(let j=Math.max(0,cj-r);j<=Math.min(ny-1,cj+r);j++)for(let i=Math.max(0,ci-r);i<=Math.min(nx-1,ci+r);i++){
+   const e=i+nx*(j+ny*k);if(fea.act[e]&&cen(e).distanceTo(p)<=R+.6*h)fea.pad[e]=1}};
+ for(const p of pts.mounts){padAt(p);for(const n of near(p))for(let d=0;d<3;d++)fea.fixed[3*n+d]=1}
+ for(const p of pts.supports){padAt(p);for(const n of near(p)){fea.fixed[3*n+1]=1;fea.springs[3*n]=fea.springs[3*n+2]=fea.Ke[0]*.02}} // опора: запрет по вертикали, горизонталь — слабые пружины
+ for(const p of pts.loads){padAt(p);const nl=near(p),d=loadDir(p,mc);for(const n of nl){fea.f[3*n]+=d.x*cfg.F/(pts.loads.length*nl.length);fea.f[3*n+1]+=d.y*cfg.F/(pts.loads.length*nl.length);fea.f[3*n+2]+=d.z*cfg.F/(pts.loads.length*nl.length)}}
+ fea.o=o;fea.cen=cen;refreshMarkers();
+ clearResult0(nx*ny*nz,h)}
+function clearResult0(nel,h){for(const m of ms){scene.remove(m);m.geometry.dispose()}ms=SH.map(n=>{const m=new THREE.InstancedMesh(makeGeo(n).scale(h,h,h),new THREE.MeshStandardMaterial({roughness:.5,metalness:.1}),nel);
+  m.instanceColor=new THREE.InstancedBufferAttribute(new Float32Array(nel*3),3);m.count=0;m.frustumCulled=false;scene.add(m);return m})}
+const typ=e=>cfg.shape==='Смешанные'?(Math.imul(e,2654435761)>>>0)%5:Math.max(0,SH.indexOf(cfg.shape));
+function clearMeshView(){if(meshObj){scene.remove(meshObj);meshObj.geometry.dispose();meshObj=null}MESHR=null}
+function render(){if(!fea||!last)return;if(cfg.shape===MESHN&&!running){buildMeshView();return}clearMeshView();renderCubes()}
+async function buildMeshView(){try{await buildMeshViewI()}catch(e){status('Ошибка построения меша: '+e.message,100,true);console.error(e)}}
+async function buildMeshViewI(){const tok=++mtok;status('Построение меша: поле плотности…',10);await tk();if(tok!==mtok)return;
+ const s=cfg.msub,hs=fea.h/s,o=fea.o,F=buildField(fea,s,DM&&DM.model?extendX(fea,2):null);let VtF=-1;
+ if(DM&&DM.model&&MODEL.T){status('Привязка к форме модели…',25);await tk();const T=new Float32Array(MODEL.T.length);for(let i=0;i<T.length;i++)T[i]=MODEL.T[i]*DM.s;
+  const Mk=maskField(T,o,hs,fea.nx*s,fea.ny*s,fea.nz*s,cfg.fill==='Внутри');let c=0;for(let i=0;i<F.S.length;i++){F.S[i]=Math.min(F.S[i],Mk[i]);if(F.S[i]>cfg.thr)c++}VtF=c*hs**3}
+ status('Построение поверхности…',35);await tk();if(tok!==mtok)return;
+ let iso=cfg.thr; // подбираем уровень поверхности так, чтобы объём меша = объёму расчётной структуры
+ if(cfg.mcal){let n=0;for(const e of fea.A)if(fea.x[e]>cfg.thr)n++;const Vt=VtF>=0?VtF:n*fea.h**3;let lo=.08,hi=.7;
+  for(let q=0;q<9;q++){const mid=(lo+hi)/2,t=surfaceNets(F.S,F.X,F.Y,F.Z,mid,hs,o.x,o.y,o.z);if(Math.abs(meshVol(t.V,t.I))>Vt)lo=mid;else hi=mid;if(q%3===2){status('Калибровка объёма меша…',35+q*3);await tk();if(tok!==mtok)return}}
+  iso=(lo+hi)/2}
+ let m=surfaceNets(F.S,F.X,F.Y,F.Z,iso,hs,o.x,o.y,o.z),removed=0,parts=1;
+ if(!m.I.length){status('Меш пуст: уменьшите порог плотности',100,true);return}
+ if(cfg.mkeep){const k=keepLargest(m.V,m.I);m={V:k.V,I:k.I};removed=k.removed;parts=k.parts}
+ status('Сглаживание…',65);await tk();if(tok!==mtok)return;taubin(m.V,m.I,cfg.msm);
+ const a=analyzeMesh(m.V,m.I);if(a.vol<0){for(let t=0;t<m.I.length;t+=3){const q=m.I[t+1];m.I[t+1]=m.I[t+2];m.I[t+2]=q}a.vol=-a.vol}
+ const col=new Float32Array(m.V.length),lim=MAT[cfg.mat].s/cfg.SF,c=new THREE.Color(),{nx,ny,nz,h}=fea;
+ for(let v=0;v<m.V.length/3;v++){let r=.55,gg=.7,b=.9;
+  if(cfg.mcol){const i=Math.min(nx-1,Math.max(0,Math.floor((m.V[3*v]-o.x)/h))),j=Math.min(ny-1,Math.max(0,Math.floor((m.V[3*v+1]-o.y)/h))),k=Math.min(nz-1,Math.max(0,Math.floor((m.V[3*v+2]-o.z)/h)));
+   c.setHSL(.66*(1-Math.min(1,last.vm[i+nx*(j+ny*k)]/lim)),.85,.5);r=c.r;gg=c.g;b=c.b}col[3*v]=r;col[3*v+1]=gg;col[3*v+2]=b}
+ clearMeshView();const g2=new THREE.BufferGeometry();g2.setAttribute('position',new THREE.BufferAttribute(m.V,3));g2.setAttribute('color',new THREE.BufferAttribute(col,3));g2.setIndex(new THREE.BufferAttribute(m.I,1));g2.computeVertexNormals();
+ meshObj=new THREE.Mesh(g2,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.45,metalness:.1}));scene.add(meshObj);ms.forEach(q=>q.count=0);
+ MESHR={V:m.V,I:m.I,vol:a.vol,bad:a.bad,tris:a.tris,removed,iso,parts};hud();status('Меш готов: '+a.tris+' треугольников',100,true)}
+function renderCubes(){const lim=MAT[cfg.mat].s/cfg.SF,cnt=[0,0,0,0,0],o=new THREE.Object3D(),c=new THREE.Color();
+ for(const e of fea.A){if(fea.x[e]<=cfg.thr)continue;const t=typ(e),m=ms[t],i=cnt[t]++;o.position.copy(fea.cen(e));o.updateMatrix();m.setMatrixAt(i,o.matrix);
+  c.setHSL(.66*(1-Math.min(1,last.vm[e]/lim)),.85,.5);m.setColorAt(i,c)}
+ ms.forEach((m,t)=>{m.count=cnt[t];m.instanceMatrix.needsUpdate=true;m.instanceColor.needsUpdate=true})}
+function hud(it,vf){if(it!==undefined){HS.it=it;HS.vf=vf}it=HS.it;vf=HS.vf;const mt=MAT[cfg.mat],el=document.getElementById('hud');let h='<b>'+cfg.mat+'</b>: E='+mt.E+' МПа, σ<sub>расч</sub>='+mt.s+' МПа'+(mt.br?' (хрупкий, по растяжению)':'')+', ρ='+mt.rho+' кг/м³';
+ if(fea&&last){let n=0;for(const e of fea.A)if(fea.x[e]>cfg.thr)n++;const h3=Math.pow(fea.h,3),V=n*h3,V0=fea.A.length*h3,mass=V*mt.rho/1e6,mass0=V0*mt.rho/1e6,sf=last.s95>0?mt.s/last.s95:0,ok=sf>=cfg.SF;
+  h+='<br>Итерация <b>'+it+'</b>/'+cfg.iters+' · цель по объёму '+Math.round(vf*100)+'%<br>Масса: <b>'+mass.toFixed(1)+' г</b> (сплошная: '+mass0.toFixed(1)+' г, −'+Math.round((1-V/V0)*100)+'%)'+
+  '<br>Напряжение (95-й перц.): <b>'+last.s95.toFixed(1)+' МПа</b>, пики до '+last.smax.toFixed(1)+' МПа<br>Запас прочности: <b class="'+(ok?'ok':'bad')+'">'+sf.toFixed(2)+(ok?' ✓':' ✗ ниже требуемого '+cfg.SF)+'</b>'+
+  '<br>Макс. перемещение: '+fea.maxDisp(mt.E).toFixed(3)+' мм';
+  if(MESHR)h+='<br><b>Меш:</b> '+MESHR.tris+' треуг., объём '+Math.round(MESHR.vol)+' мм³, масса <b>'+(MESHR.vol*mt.rho/1e6).toFixed(1)+' г</b><br>'+(MESHR.bad?'<span class="bad">есть открытые рёбра: '+MESHR.bad+'</span>':'<span class="ok">замкнутый, пригоден для печати ✓</span>')+(MESHR.removed?' · убрано мелких обломков: '+MESHR.removed:'')+(MESHR.parts>1?'<br><span class="bad">меш из '+MESHR.parts+' несвязных частей: путь нагрузки может быть разорван — увеличьте «Мин. долю материала» и пересчитайте</span>':'')}
+ else h+='<br>Задайте область и точки (или сразу «Старт» — точки выберутся автоматически).';
+ h+='<br><i style="opacity:.7">Оценка по линейной упругости; для ответственных деталей проверяйте полноценным МКЭ и испытаниями.</i>';el.innerHTML=h}
+
+async function run(){if(running){stopReq=true;return}running=true;stopReq=false;mtok++;
+ try{setup();fea.init(cfg.vf);let vf=cfg.vf,mt=MAT[cfg.mat];status('Расчёт…',null);
+  for(let it=1;it<=cfg.iters&&!stopReq;it++){last=await fea.iterate(vf);
+   if(cfg.auto&&it>=8&&last.s95>0){const lim=mt.s/cfg.SF;if(last.s95<lim*.95)vf=Math.max(cfg.vmin,vf*.97);else if(last.s95>lim)vf=Math.min(.95,vf*1.04)}
+   render();hud(it,vf);status('Итерация '+it+' из '+cfg.iters,Math.round(it/cfg.iters*100));await tk()}
+  running=false;if(cfg.shape===MESHN)render();else status(stopReq?'Остановлено':'Расчёт завершён ✓',100,true)}
+ catch(e){status('Ошибка: '+e.message,100,true);console.error(e)}
+ running=false}
+
+// ===== Интерфейс =====
+const g=new lil.GUI({title:'Несущая структура'}),fi=document.getElementById('f');
+fi.onchange=e=>{if(e.target.files[0])loadModel(e.target.files[0]);fi.value=''};
+const d1=g.addFolder('Область'),d2=g.addFolder('Нагрузка'),d3=g.addFolder('Структура');
+d1.add(cfg,'src',['Параллелепипед','Своя модель']).name('Форма области').onChange(refreshDomain);
+d1.add({m:()=>fi.click()},'m').name('Загрузить модель (.obj/.glb)');
+d1.add(cfg,'fill',['Внутри','Снаружи']).name('Заполнение').onChange(refreshDomain);
+d1.add(cfg,'L',20,400,1).name('Длина, мм').onFinishChange(refreshDomain);
+d1.add(cfg,'W',5,200,1).name('Ширина, мм').onFinishChange(refreshDomain);
+d1.add(cfg,'H',5,200,1).name('Высота, мм').onFinishChange(refreshDomain);
+d2.add(cfg,'load',['Сгибание','Сжатие','Растяжение']).name('Тип нагрузки').onChange(refreshMarkers);
+d2.add(cfg,'F',1,5000,1).name('Сила, Н');d2.add(cfg,'SF',1,6,.1).name('Запас прочности');
+mountCtl=d2.add({a:()=>togglePick('mount')},'a').name('1. Задать точки крепления');
+loadCtl=d2.add({a:()=>togglePick('load')},'a').name('2. Задать точки упора (нагрузки)');supCtl=d2.add({a:()=>togglePick('support')},'a').name('3. Задать опору снизу');
+d2.add({a:clearPts},'a').name('Очистить точки');d2.add(cfg,'padR',1,4,.5).name('Зона точки, ячеек');
+g.add(cfg,'mat',Object.keys(MAT)).name('Материал').onChange(()=>{hud();render()});
+d3.add(cfg,'shape',['Смешанные',...SH,MESHN]).name('Элементы / меш').onChange(()=>{render()});
+d3.add(cfg,'res',12,44,1).name('Разрешение (ячеек)');d3.add(cfg,'thr',.2,.9,.01).name('Порог плотности').onChange(()=>{render();hud()});
+d3.add(cfg,'msub',1,3,1).name('Меш: детализация ×').onFinishChange(()=>render());d3.add(cfg,'msm',0,20,1).name('Меш: сглаживание').onFinishChange(()=>render());
+d3.add(cfg,'mkeep').name('Меш: убрать мелкие обломки').onChange(()=>render());d3.add(cfg,'mcol').name('Меш: цвет по напряжению').onChange(()=>render());d3.add(cfg,'mcal').name('Меш: сохранить объём расчёта').onChange(()=>render());
+d3.add(cfg,'rmin',1,3,.1).name('Радиус фильтра');d3.add(cfg,'vf',.05,.9,.01).name('Старт. доля материала');
+d3.add(cfg,'auto').name('Авто-облегчение по прочности');d3.add(cfg,'vmin',.03,.5,.01).name('Мин. доля материала');d3.add(cfg,'iters',10,150,1).name('Итераций');d3.add(cfg,'seed',1,99999,1).name('Seed формы');
+g.add({a:()=>{if(running)return;cfg.seed=Math.floor(Math.random()*99999);cfg.load=['Сгибание','Сжатие','Растяжение'][Math.floor(Math.random()*3)];pts.mounts=[];pts.loads=[];pts.supports=[];cfg.rpts=true;g.controllersRecursive().forEach(c=>c.updateDisplay());run()}},'a').name('Случайная форма (по параметрам)');
+g.add({a:resetAll},'a').name('Сбросить параметры и модель');g.add({a:exportOBJ},'a').name('Скачать OBJ');g.add({a:exportSTL},'a').name('Скачать STL (для 3D-печати)');
+const sb=g.add({a:()=>run()},'a').name('▶ СТАРТ');startBtn=sb.$button||sb.domElement.querySelector('button');startBtn.classList.add('startbtn');sb.domElement.classList.add('startc');
+if(innerWidth<700)g.close();
+refreshDomain();
+(function loop(){requestAnimationFrame(loop);startBtn.classList.toggle('run',running);const t=running?'■ СТОП':'▶ СТАРТ';if(sb._n!==t){sb.name(t);sb._n=t}controls.update();renderer.render(scene,camera)})();
+</script>
+</body>
+</html>
