@@ -83,14 +83,15 @@ footer{border-top:1px solid var(--line);padding:20px 0 32px;color:var(--muted);f
 var MODELS = [
   {id:"organik", title:"Органик", desc:"3D-симулятор роста живой структуры из кубов: ветер, плотность среды, заполнение объёма внутри загруженной модели.", tags:["3D","Рост","OBJ"], url:"organik.html", art:"cubes"},
   {id:"organik2", title:"Дерево", desc:"Рост ветвей полигональной сеткой: от толстого основания к тонкому кончику. Пресеты: дерево, куст, мох, лиана, корни, плесень.", tags:["3D","Пресеты","OBJ / STL"], url:"tree.html", art:"branch"},
-  {id:"load", title:"Несущие формы", desc:"Лёгкая органическая форма для деталей под нагрузкой: рукоятка, кронштейн. Расчёт нагрузки и выбор материала.", tags:["3D-печать","Нагрузка"], url:"", art:"truss"},
-  {id:"hair", title:"Волосы и рисунок головы", desc:"Рисунок головы с волосами. Позже здесь появится генератор волос.", tags:["2D","Рисунок","Скоро генератор"], url:"", art:"cut"}
+  {id:"load", title:"Несущие формы", desc:"Лёгкая органическая форма для деталей под нагрузкой: рукоятка, кронштейн. Расчёт нагрузки и выбор материала.", tags:["3D-печать","Нагрузка"], url:"load.html", art:"truss"},
+{id:"hair", title:"Прически", desc:"Моделирование волос и причёсок на рисунке головы.", tags:["2D","Волосы","Причёски"], url:"hair.html", art:"head"}
 ];
 
 var ART = {
   cubes:'<g fill="none" stroke="var(--accent)" stroke-width="2"><path d="M120 95l22-12 22 12v24l-22 12-22-12z"/><path d="M142 83v24M120 95l22 12 22-12"/><path d="M150 60l16-9 16 9v18l-16 9-16-9z" stroke="var(--accent2)"/><path d="M95 118l14-8 14 8v16l-14 8-14-8z" stroke="var(--accent2)"/></g>',
   branch:'<g fill="none" stroke="var(--accent)" stroke-linecap="round"><path d="M160 150V95" stroke-width="12"/><path d="M160 95Q158 70 130 50" stroke-width="7"/><path d="M160 95Q166 68 195 45" stroke-width="7"/><path d="M130 50l-14-14M130 50l10-18M195 45l12-14M195 45l-14-12" stroke-width="3" stroke="var(--accent2)"/></g>',
   truss:'<g fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"><path d="M70 110h180M70 60h180M70 60l45 50 45-50 45 50 45-50M70 60v50M250 60v50"/></g><g fill="var(--accent2)"><circle cx="70" cy="60" r="5"/><circle cx="250" cy="60" r="5"/></g>',
+  head:'<g fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"><ellipse cx="160" cy="84" rx="30" ry="38"/><path d="M149 120v14M171 120v14M118 148q42-20 84 0"/><path d="M150 86h.1M170 86h.1M152 102q8 6 16 0" stroke-width="3"/></g><g fill="none" stroke="var(--accent2)" stroke-width="3" stroke-linecap="round"><path d="M130 86C116 40 150 14 180 20 208 26 212 62 190 86"/><path d="M136 70C146 46 170 40 188 54"/><path d="M130 86C124 106 126 122 116 136M190 86C196 106 194 122 204 136"/><path d="M150 28C148 42 144 54 138 64M166 24C166 38 164 50 160 60"/></g>',
   cut:'<g fill="none" stroke="var(--accent)" stroke-width="2.5"><circle cx="160" cy="55" r="16"/><path d="M160 71v42M160 85l-28 20M160 85l28 20M160 113l-18 32M160 113l18 32" stroke-dasharray="6 5"/></g><path d="M105 40l14 14M215 40l-14 14" stroke="var(--accent2)" stroke-width="3" stroke-linecap="round"/>'
 };
 
